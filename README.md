@@ -135,24 +135,29 @@ You can install it with:
 
 Layouts are essential and not installed by cargo. 
 **Install them manually:**
-
-    sudo mkdir -p /usr/share/unfettered-keyboard/layouts
-
+```
+sudo mkdir -p /usr/share/unfettered-keyboard/layouts
+```
+```
 	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/latn_qwerty_us.xml
 	sudo install -m 0644 latn_qwerty_us.xml /usr/share/unfettered-keyboard/layouts/
-
+```
+```
 	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/bottom_row.xml
 	sudo install -m 0644 bottom_row.xml /usr/share/unfettered-keyboard/layouts/
-
+```
+```
 	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/numeric.xml
 	sudo install -m 0644 numeric.xml /usr/share/unfettered-keyboard/layouts/
-
+```
+```
 	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/greekmath.xml
 	sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
-
+```
+```
 	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/emoji.xml
-	sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
-
+	sudo install -m 0644 emoji.xml /usr/share/unfettered-keyboard/layouts/
+```
 # Configuration
 
 This keyboard is configured with [YAML](https://yaml.org). The configuration
