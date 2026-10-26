@@ -27,6 +27,8 @@ use std::iter;
 use std::ptr;
 use std::sync::atomic::AtomicPtr;
 
+const KEYCAP_RADIUS: usize = 12;
+
 fn convert_gray_to_bgrx(mut dest: ImgRefMut<BGRA<u8>>, src: ImgRef<u8>, fg_color: BGR<f32>)
 {
     for (dest, src) in iter::zip(dest.rows_mut(), src.rows()) {
@@ -49,6 +51,45 @@ fn fill_image(dest: &mut ImgRefMut<BGRA<u8>>, src: BGRA<u8>)
 {
     for dest in dest.pixels_mut() {
         *dest = src;
+    }
+}
+
+fn fill_rounded_rect(dest: &mut ImgRefMut<BGRA<u8>>, src: BGRA<u8>, radius: usize)
+{
+    if radius == 0 {
+        fill_image(dest, src);
+        return;
+    }
+
+    let width = dest.width();
+    let height = dest.height();
+    let radius = radius.min(width / 2).min(height / 2);
+
+    for y in 0..height {
+        for x in 0..width {
+            let in_corner = if x < radius && y < radius {
+                (x as isize - radius as isize).pow(2) + (y as isize - radius as isize).pow(2)
+                    <= (radius as isize).pow(2)
+            } else if x >= width - radius && y < radius {
+                (x as isize - (width - radius) as isize).pow(2)
+                    + (y as isize - radius as isize).pow(2)
+                    <= (radius as isize).pow(2)
+            } else if x < radius && y >= height - radius {
+                (x as isize - radius as isize).pow(2)
+                    + (y as isize - (height - radius) as isize).pow(2)
+                    <= (radius as isize).pow(2)
+            } else if x >= width - radius && y >= height - radius {
+                (x as isize - (width - radius) as isize).pow(2)
+                    + (y as isize - (height - radius) as isize).pow(2)
+                    <= (radius as isize).pow(2)
+            } else {
+                true
+            };
+
+            if in_corner {
+                dest[(x, y)] = src;
+            }
+        }
     }
 }
 
@@ -364,9 +405,9 @@ impl<D: Display> Graphics<D> {
 
                 let src = bitmap_to_imgref(&glyph.bitmap);
                 let dest = img.sub_image_mut(dest_x,
-                                             dest_y,
-                                             glyph.bitmap.width as usize,
-                                             glyph.bitmap.rows as usize);
+                                              dest_y,
+                                              glyph.bitmap.width as usize,
+                                              glyph.bitmap.rows as usize);
                 copy_image(dest, src);
             }
 
@@ -554,9 +595,9 @@ impl<D: Display> Graphics<D> {
         }
 
         if pressed {
-            fill_image(&mut keyimg, colors.keycap_pressed);
+            fill_rounded_rect(&mut keyimg, colors.keycap_pressed, KEYCAP_RADIUS);
         } else {
-            fill_image(&mut keyimg, colors.keycap);
+            fill_rounded_rect(&mut keyimg, colors.keycap, KEYCAP_RADIUS);
         }
 
         let color = Self::keypart_to_color(&key.parts[0], false, mod_state, colors);
