@@ -79,9 +79,9 @@ impl Default for KeyboardColors {
     fn default() -> Self
     {
         Self {
-            background: RGB::new(0, 0, 0).into(),
-            keycap: RGB::new(0, 0, 0).into(),
-            keycap_pressed: RGB::new(51, 51, 51).into(),
+            background: RGB::new(15, 15, 15).into(),
+            keycap: RGB::new(45, 45, 45).into(),
+            keycap_pressed: RGB::new(77, 77, 77).into(),
             label: RGB::new(255, 255, 255).into(),
             label_locked: RGB::new(0, 255, 25).into(),
             label_pressed: RGB::new(0, 153, 255).into(),
@@ -251,7 +251,7 @@ impl Configuration {
             evfb_height: 0.25,
 
             colors: KeyboardColors::default(),
-            keycap_padding: 0.,
+            keycap_padding: 0.02,
         };
 
         if let Ok(file) = Self::get_configuration_file() {
