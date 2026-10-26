@@ -543,6 +543,9 @@ impl<D: Display, K: Keyboard> Button<D, K> {
             Keysym::Caps_Lock => {
                 self.layout.switch_text();
             },
+            Keysym::Menu => {
+                self.layout.switch_emoji();
+            },
             _ => return DrawOperation::Key,
         }
 

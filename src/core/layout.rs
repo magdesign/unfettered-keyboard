@@ -62,7 +62,7 @@ unsafe extern "C" fn start_elem(data: *mut c_void,
 {
     let layout = &mut *(data as *mut LayoutLoader);
     let name = CStr::from_ptr(c_name)
-                         .to_str().expect("layout: XML element name must be UTF-8");
+                     .to_str().expect("layout: XML element name must be UTF-8");
 
     let mut attrs = HashMap::with_capacity(10);
 
@@ -82,7 +82,7 @@ unsafe extern "C" fn end_elem(data: *mut c_void, c_name: *const expat::XML_Char)
 {
     let layout = &mut *(data as *mut LayoutLoader);
     let name = CStr::from_ptr(c_name)
-                         .to_str().expect("layout: XML element name must be UTF-8");
+                     .to_str().expect("layout: XML element name must be UTF-8");
 
     layout.end_elem(name);
 }
@@ -207,9 +207,9 @@ impl Part {
                 => KeyValue::from(Keysym::NoSymbol, "\t"),
 
             KeyValue(Keysym::Up, _)
-                => KeyValue::from(Keysym::Prior, "⇑"), // Page Up
+                => KeyValue::from(Keysym::Prior, "⇑"),
             KeyValue(Keysym::Down, _)
-                => KeyValue::from(Keysym::Next, "⇓"), // Page Down
+                => KeyValue::from(Keysym::Next, "⇓"),
             KeyValue(Keysym::Left, _)
                 => KeyValue::from(Keysym::Home, "⇤"),
             KeyValue(Keysym::Right, _)
@@ -526,7 +526,7 @@ impl Key {
     }
 }
 
-const KEYSYMS: [(&str, Keysym, &str); 24] = [
+const KEYSYMS: [(&str, Keysym, &str); 26] = [
     ("\\#", Keysym::numbersign, "#"),
     ("\\?", Keysym::question, "?"),
     ("\\@", Keysym::at, "@"),
@@ -546,6 +546,8 @@ const KEYSYMS: [(&str, Keysym, &str); 24] = [
     ("right", Keysym::Right, "→"),
     ("shift", Keysym::Shift_L, "⇧"),
     ("space", Keysym::space, " "),
+    ("switch_back_emoji", Keysym::Menu, "⌂"),
+    ("switch_emoji", Keysym::Menu, "🙂"),
     ("switch_greekmath", Keysym::Scroll_Lock, "πλ∇¬"),
     ("switch_numeric", Keysym::Num_Lock, "123+"),
     ("switch_text", Keysym::Caps_Lock, "ABC"),
@@ -705,12 +707,14 @@ pub struct Layout {
     main_layout: LayoutFile,
     numeric: LayoutFile,
     greekmath: LayoutFile,
+    emoji: LayoutFile,
     bottom_row: LayoutFile,
 
     rows: Vec<Vec<Key>>,
     width: f64,
     height: f64,
     text_supp: bool,
+    emoji_mode: bool,
 }
 
 impl Layout {
@@ -722,15 +726,6 @@ impl Layout {
         }
     }
 
-    /*
-     * Check if the modifier can be emitted as a key event.
-     *
-     * Modifiers that modify the key values (e.g. the Fn key and any accents)
-     * should usually not be emitted as key events to applications, and their
-     * only purpose is to modify the key values. The Meta modifier should also
-     * be inhibited from emitting a key event, because its purpose is to make
-     * every key value emit a key press.
-     */
     pub fn is_pressable_modifier(modifier: usize) -> bool
     {
         !Self::is_keysym_modifier(modifier) && modifier != MOD_META
@@ -738,8 +733,6 @@ impl Layout {
 
     pub fn is_label_modifier(modifier: usize) -> bool
     {
-        // Shift does not change the keysym used for input, but changes the
-        // rendered keysym.
         Self::is_keysym_modifier(modifier) || modifier == MOD_SHIFT
     }
 
@@ -801,6 +794,10 @@ impl Layout {
             .ok_or(LayoutError::NotFound(String::from("greekmath.xml")))?;
         let greekmath = LayoutLoader::load(path, extra_keys)?;
 
+        let path = base_dirs.find_data_file("emoji.xml")
+            .ok_or(LayoutError::NotFound(String::from("emoji.xml")))?;
+        let emoji = LayoutLoader::load(path, extra_keys)?;
+
         let path = base_dirs.find_data_file("bottom_row.xml")
             .ok_or(LayoutError::NotFound(String::from("bottom_row.xml")))?;
         let bottom_row = LayoutLoader::load(path, extra_keys)?;
@@ -809,12 +806,14 @@ impl Layout {
             main_layout,
             numeric,
             greekmath,
+            emoji,
             bottom_row,
 
             rows: Vec::new(),
             width: 0.0,
             height: 0.0,
             text_supp: false,
+            emoji_mode: false,
         };
 
         let data = layout.main_layout.clone();
@@ -916,6 +915,7 @@ impl Layout {
 
     pub fn switch_numeric(&mut self)
     {
+        self.emoji_mode = false;
         let data = self.numeric.clone();
         self.open_layout(data);
         self.set_text_supported(self.text_supp);
@@ -923,13 +923,30 @@ impl Layout {
 
     pub fn switch_greekmath(&mut self)
     {
+        self.emoji_mode = false;
         let data = self.greekmath.clone();
         self.open_layout(data);
         self.set_text_supported(self.text_supp);
     }
 
+    pub fn switch_emoji(&mut self)
+    {
+        if self.emoji_mode {
+            self.emoji_mode = false;
+            let data = self.main_layout.clone();
+            self.open_layout(data);
+        } else {
+            self.emoji_mode = true;
+            let data = self.emoji.clone();
+            self.open_layout(data);
+        }
+
+        self.set_text_supported(self.text_supp);
+    }
+
     pub fn switch_text(&mut self)
     {
+        self.emoji_mode = false;
         let data = self.main_layout.clone();
         self.open_layout(data);
         self.set_text_supported(self.text_supp);
