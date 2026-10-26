@@ -28,6 +28,7 @@ use std::ptr;
 use std::sync::atomic::AtomicPtr;
 
 const KEYCAP_RADIUS: usize = 12;
+const SUBLABEL_MARGIN: usize = 10;
 
 fn convert_gray_to_bgrx(mut dest: ImgRefMut<BGRA<u8>>, src: ImgRef<u8>, fg_color: BGR<f32>)
 {
@@ -514,15 +515,15 @@ impl<D: Display> Graphics<D> {
         let height = src.img.height() - src.y;
 
         let x = match x_anchor {
-            Anchor::Min => 0,
-            Anchor::Center => (dest.width() - width) / 2,
-            Anchor::Max => dest.width() - width,
+            Anchor::Min => SUBLABEL_MARGIN,
+            Anchor::Center => (dest.width().saturating_sub(width)) / 2,
+            Anchor::Max => dest.width().saturating_sub(width + SUBLABEL_MARGIN),
         };
 
         let y = match y_anchor {
-            Anchor::Min => 0,
-            Anchor::Center => (dest.height() - height) / 2,
-            Anchor::Max => dest.height() - height,
+            Anchor::Min => SUBLABEL_MARGIN,
+            Anchor::Center => (dest.height().saturating_sub(height)) / 2,
+            Anchor::Max => dest.height().saturating_sub(height + SUBLABEL_MARGIN),
         };
 
         let src = src.img.sub_image(0, src.y, width, height);
