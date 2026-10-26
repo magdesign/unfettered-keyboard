@@ -1,5 +1,7 @@
 The Unfettered Keyboard is an on-screen keyboard for Linux mobile.
 
+<img width="540" height="230" alt="Image" src="https://github.com/user-attachments/assets/d6bbe190-1b37-4ba1-8d97-f98bbe7bbd53" />
+
 # User Interfaces (UIs)
 
 ## Phosh
