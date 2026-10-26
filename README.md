@@ -133,17 +133,25 @@ You can install it with:
 
     cargo install --path . --bin <target>
 
-Layouts are essential and not installed by cargo. They are installed manually:
+Layouts are essential and not installed by cargo. 
+**Install them manually:**
 
     sudo mkdir -p /usr/share/unfettered-keyboard/layouts
-    curl -OL https://github.com/Julow/Unexpected-Keyboard/raw/1.29.1/srcs/layouts/latn_qwerty_us.xml
-    sudo mv latn_qwerty_us.xml /usr/share/unfettered-keyboard/layouts
-    curl -OL https://github.com/Julow/Unexpected-Keyboard/raw/1.29.1/res/xml/bottom_row.xml
-    sudo mv bottom_row.xml /usr/share/unfettered-keyboard/layouts
-    curl -OL https://github.com/Julow/Unexpected-Keyboard/raw/1.29.1/res/xml/numeric.xml
-    sudo mv numeric.xml /usr/share/unfettered-keyboard/layouts
-    curl -OL https://github.com/Julow/Unexpected-Keyboard/raw/1.29.1/res/xml/greekmath.xml
-    sudo mv greekmath.xml /usr/share/unfettered-keyboard/layouts
+
+	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/latn_qwerty_us.xml
+	sudo install -m 0644 latn_qwerty_us.xml /usr/share/unfettered-keyboard/layouts/
+
+	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/bottom_row.xml
+	sudo install -m 0644 bottom_row.xml /usr/share/unfettered-keyboard/layouts/
+
+	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/numeric.xml
+	sudo install -m 0644 numeric.xml /usr/share/unfettered-keyboard/layouts/
+
+	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/greekmath.xml
+	sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
+
+	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/emoji.xml
+	sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
 
 # Configuration
 
