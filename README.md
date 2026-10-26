@@ -1,6 +1,8 @@
-The Unfettered Keyboard is an on-screen keyboard for Linux mobile.
+**The Unfettered Keyboard is an on-screen keyboard for Linux mobile.**
 
 <img width="540" height="230" alt="Image" src="https://github.com/user-attachments/assets/d6bbe190-1b37-4ba1-8d97-f98bbe7bbd53" />
+
+forked from [Richard Acayan](https://gitlab.com/flamingradian/unfettered-keyboard)
 
 # User Interfaces (UIs)
 
@@ -141,24 +143,24 @@ Layouts are essential and not installed by cargo.
 sudo mkdir -p /usr/share/unfettered-keyboard/layouts
 ```
 ```
-	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/latn_qwerty_us.xml
-	sudo install -m 0644 latn_qwerty_us.xml /usr/share/unfettered-keyboard/layouts/
+curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/latn_qwerty_us.xml
+sudo install -m 0644 latn_qwerty_us.xml /usr/share/unfettered-keyboard/layouts/
 ```
 ```
-	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/bottom_row.xml
-	sudo install -m 0644 bottom_row.xml /usr/share/unfettered-keyboard/layouts/
+curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/bottom_row.xml
+sudo install -m 0644 bottom_row.xml /usr/share/unfettered-keyboard/layouts/
 ```
 ```
-	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/numeric.xml
-	sudo install -m 0644 numeric.xml /usr/share/unfettered-keyboard/layouts/
+curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/numeric.xml
+sudo install -m 0644 numeric.xml /usr/share/unfettered-keyboard/layouts/
 ```
 ```
-	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/greekmath.xml
-	sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
+curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/greekmath.xml
+sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
 ```
 ```
-	curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/emoji.xml
-	sudo install -m 0644 emoji.xml /usr/share/unfettered-keyboard/layouts/
+curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/emoji.xml
+sudo install -m 0644 emoji.xml /usr/share/unfettered-keyboard/layouts/
 ```
 # Configuration
 
