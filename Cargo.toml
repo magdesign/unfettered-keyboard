@@ -1,0 +1,60 @@
+[package]
+name = "unfettered-keyboard"
+version = "4.2.1"
+edition = "2018"
+license = "GPL-3.0-only"
+
+[dependencies]
+ashpd = { version = "0.13.1", features = ["remote_desktop", "screencast", "wayland"] }
+evdev = "0.13.0"
+fontconfig = "0.11.0"
+# Disable freetype-sys, as it vendors libfreetype2 while fontconfig dynamically
+# links to it. Large dependencies should not be duplicated.
+freetype = { version = "0.8.0", default-features = false }
+futures-util = "0.3.31"
+imgref = "1.6.1"
+libc = "0.2.171"
+linux-raw-sys = { version = "0.12.0", features = ["ioctl"] }
+memmap2 = "0.9.0"
+polling = "3.0.0"
+reis = "0.7.0"
+rgb = "0.8.48"
+rustix = { version = "1.1.2", features = ["termios"] }
+signal-hook = "0.4.1"
+tokio = { version = "1.43.0", features = ["macros", "rt"] }
+wayland-backend = "0.3.4"
+wayland-client = "0.31.3"
+wayland-protocols = { version = "0.32.1", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3.1", features = ["client"] }
+wayland-scanner = "0.31.2"
+xdg = "3.0.0"
+xkeysym = "0.2.1"
+yaml-rust2 = "0.12.0"
+zbus = { version = "5.15.0", default-features = false, features = ["tokio"] }
+
+[build-dependencies]
+bindgen = "0.72.1"
+
+[[bin]]
+name = "ufkbd-evfb"
+path = "src/ufkbd_evfb.rs"
+
+[[bin]]
+name = "ufkbd-evfbo"
+path = "src/ufkbd_evfbo.rs"
+
+[[bin]]
+name = "ufkbd-gnome"
+path = "src/ufkbd_gnome.rs"
+
+[[bin]]
+name = "ufkbd-kde"
+path = "src/ufkbd_kde.rs"
+
+[[bin]]
+name = "ufkbd-sxmo"
+path = "src/ufkbd_sxmo.rs"
+
+[[bin]]
+name = "ufkbd-wl"
+path = "src/ufkbd_wl.rs"

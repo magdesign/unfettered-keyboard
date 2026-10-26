@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Unfettered Keyboard
+Icon=unfettered-keyboard
+Exec=/usr/bin/ufkbd-kde
+NoDisplay=true
+X-KDE-Wayland-VirtualKeyboard=true
