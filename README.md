@@ -1,6 +1,6 @@
 **The Unfettered Keyboard is an on-screen keyboard for Linux mobile.**
 
-<img width="540" height="230" alt="Image" src="https://github.com/user-attachments/assets/d6bbe190-1b37-4ba1-8d97-f98bbe7bbd53" />
+<img width="540" height="231" alt="Image" src="https://github.com/user-attachments/assets/3f618c7e-e6af-4e5a-993f-6c0fb67be682" />
 
 forked from [Richard Acayan](https://gitlab.com/flamingradian/unfettered-keyboard)
 
