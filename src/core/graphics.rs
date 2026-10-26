@@ -293,10 +293,10 @@ impl<D: Display> Graphics<D> {
         unsafe {
             let mut ftface = std::ptr::null_mut();
             freetype::FT_New_Memory_Face(*self.ft.get_mut(),
-                                         fontbuf.as_ptr(),
-                                         fontbuf.len() as freetype::FT_Long,
-                                         self.fonts[idx].1 as freetype::FT_Long,
-                                         &mut ftface);
+                                          fontbuf.as_ptr(),
+                                          fontbuf.len() as freetype::FT_Long,
+                                          self.fonts[idx].1 as freetype::FT_Long,
+                                          &mut ftface);
             if ptr::eq(ftface, ptr::null_mut()) {
                 None
             } else {
@@ -360,7 +360,7 @@ impl<D: Display> Graphics<D> {
             (*ftface).bbox)
         };
 
-        let mut width = 0;
+        let mut width = 0usize;
         let glyph_width = ((bbox.xMax - bbox.xMin) as usize
                         * metrics.x_ppem as usize)
                         .div_ceil(units_per_em as usize);
@@ -379,14 +379,13 @@ impl<D: Display> Graphics<D> {
                              bbox.yMin as isize
                            * metrics.y_ppem as isize
                            / units_per_em as isize);
-        let mut y = (y_max - metrics.ascender as isize / 64) as usize;
-        let height = (y_max - y_min) as usize;
+        let mut y = (y_max - metrics.ascender as isize / 64).max(0) as usize;
+        let mut height = (y_max - y_min).max(0) as usize;
 
         let vec: Vec<u8> = vec![0; stride * height];
         let mut img = ImgVec::new(vec, stride, height);
 
-        let mut pen = 0;
-        let mut height = (y_max - metrics.descender as isize / 64) as usize;
+        let mut pen = 0isize;
 
         for c in text.chars() {
             let glyph = unsafe {
@@ -396,24 +395,30 @@ impl<D: Display> Graphics<D> {
             };
 
             if glyph.bitmap.rows != 0 && glyph.bitmap.width != 0 {
-                pen = pen.max(-glyph.bitmap_left as isize);
+                let bitmap_left = glyph.bitmap_left as isize;
+                pen = pen.max(-bitmap_left);
 
-                let dest_x = (pen + glyph.bitmap_left as isize) as usize;
-                let dest_y = (y_max - glyph.bitmap_top as isize) as usize;
-
-                y = y.min(dest_y);
-                height = height.max(dest_y + glyph.bitmap.rows as usize);
+                let dest_x = (pen + bitmap_left).max(0) as usize;
+                let dest_y = (y_max - glyph.bitmap_top as isize).max(0) as usize;
 
                 let src = bitmap_to_imgref(&glyph.bitmap);
-                let dest = img.sub_image_mut(dest_x,
-                                              dest_y,
-                                              glyph.bitmap.width as usize,
-                                              glyph.bitmap.rows as usize);
-                copy_image(dest, src);
+                let draw_w = (glyph.bitmap.width as usize)
+                    .min(img.width().saturating_sub(dest_x));
+                let draw_h = (glyph.bitmap.rows as usize)
+                    .min(img.height().saturating_sub(dest_y));
+
+                if draw_w != 0 && draw_h != 0 {
+                    y = y.min(dest_y);
+                    height = height.max(dest_y + draw_h);
+
+                    let src = src.sub_image(0, 0, draw_w, draw_h);
+                    let dest = img.sub_image_mut(dest_x, dest_y, draw_w, draw_h);
+                    copy_image(dest, src);
+                }
             }
 
-            let new_width = (pen + glyph.bitmap_left as isize
-                                 + glyph.bitmap.width as isize) as usize;
+            let new_width = (pen + glyph.bitmap_left as isize + glyph.bitmap.width as isize)
+                .max(0) as usize;
             width = width.max(new_width);
 
             pen += glyph.advance.x as isize / 64;
@@ -423,8 +428,15 @@ impl<D: Display> Graphics<D> {
             freetype::FT_Done_Face(ftface);
         };
 
+        if height == 0 {
+            height = 1;
+        }
+        if width == 0 {
+            width = 1;
+        }
+
         let mut vec = img.into_buf();
-        vec.truncate(stride * height);
+        vec.truncate(stride.saturating_mul(height));
         let img = ImgVec::new_stride(vec, width, height, stride);
 
         TextRaster {
@@ -512,7 +524,7 @@ impl<D: Display> Graphics<D> {
                         .expect("Layout and size should be set before drawing");
 
         let width = src.img.width();
-        let height = src.img.height() - src.y;
+        let height = src.img.height().saturating_sub(src.y);
 
         let x = match x_anchor {
             Anchor::Min => SUBLABEL_MARGIN,
@@ -526,8 +538,16 @@ impl<D: Display> Graphics<D> {
             Anchor::Max => dest.height().saturating_sub(height + SUBLABEL_MARGIN),
         };
 
-        let src = src.img.sub_image(0, src.y, width, height);
-        let dest = dest.sub_image_mut(x, y, width, height);
+        let src_y = src.y.min(src.img.height());
+        let draw_w = width.min(dest.width().saturating_sub(x));
+        let draw_h = height.min(dest.height().saturating_sub(y));
+
+        if draw_w == 0 || draw_h == 0 {
+            return;
+        }
+
+        let src = src.img.sub_image(0, src_y, draw_w, draw_h);
+        let dest = dest.sub_image_mut(x, y, draw_w, draw_h);
 
         convert_gray_to_bgrx(dest, src, fg_color);
     }
@@ -574,12 +594,19 @@ impl<D: Display> Graphics<D> {
                 colors: &KeyboardColors, keycap_padding: f64)
     {
         let keycap_padding = (keycap_padding * y_scale) as usize;
-        let x1 = (key.x1 * x_scale) as usize + keycap_padding;
-        let y1 = (key.y1 * y_scale) as usize + keycap_padding;
-        let x2 = (key.x2 * x_scale) as usize - keycap_padding;
-        let y2 = (key.y2 * y_scale) as usize - keycap_padding;
+        let x1 = ((key.x1 * x_scale) as usize).saturating_add(keycap_padding);
+        let y1 = ((key.y1 * y_scale) as usize).saturating_add(keycap_padding);
+        let x2 = ((key.x2 * x_scale) as usize).saturating_sub(keycap_padding);
+        let y2 = ((key.y2 * y_scale) as usize).saturating_sub(keycap_padding);
 
-        let mut keyimg = img.sub_image_mut(x1, y1, x2 - x1, y2 - y1);
+        let width = x2.saturating_sub(x1);
+        let height = y2.saturating_sub(y1);
+
+        if width == 0 || height == 0 {
+            return;
+        }
+
+        let mut keyimg = img.sub_image_mut(x1, y1, width, height);
 
         let mut pressed = false;
         for part in &key.parts {
@@ -628,7 +655,7 @@ impl<D: Display> Graphics<D> {
                        &mut img, key, mod_state, &self.colors,
                        self.keycap_padding);
 
-        self.disp.end(x1, y1, x2 - x1, y2 - y1);
+        self.disp.end(x1, y1, x2.saturating_sub(x1), y2.saturating_sub(y1));
     }
 
     pub fn draw_modifiers(&mut self,
@@ -639,7 +666,7 @@ impl<D: Display> Graphics<D> {
         for row in layout.rows() {
             for key in row {
                 let draw = key.parts.iter().any(|p| p.modifier_id() != 0
-                                                 && modifiers[p.modifier_id() - 1]);
+                                                  && modifiers[p.modifier_id() - 1]);
                 if draw {
                     self.draw_single(key, mod_state);
                 }
@@ -677,8 +704,8 @@ impl<D: Display> Graphics<D> {
     }
 
     pub fn resize(&mut self,
-                  layout: &Layout, mod_state: &[ModState],
-                  width: u32, height: u32)
+                   layout: &Layout, mod_state: &[ModState],
+                   width: u32, height: u32)
     {
         self.x_scale = width as f64 / layout.width();
         self.y_scale = height as f64 / layout.height();
