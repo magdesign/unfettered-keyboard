@@ -20,15 +20,31 @@ use rgb::alt::BGR;
 use rgb::alt::BGRA;
 use rgb::ComponentMap;
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::Read;
 use std::cmp;
+use std::ffi::CString;
 use std::iter;
 use std::ptr;
 use std::sync::atomic::AtomicPtr;
 
 const KEYCAP_RADIUS: usize = 12;
 const SUBLABEL_MARGIN: usize = 10;
+
+/*
+ * Color emoji are drawn at (label font size * EMOJI_SCALE) pixels tall. The
+ * label font size is 0.33 of a key height (0.22 for sublabels), so 1.5 gives
+ * an emoji of roughly half a key height. Tune to taste.
+ */
+const EMOJI_SCALE: f64 = 1.5;
+
+/*
+ * FreeType constants, spelled out so we do not depend on how the bindings
+ * name them.
+ */
+const FT_LOAD_RENDER: i32 = 1 << 2;
+const FT_LOAD_COLOR: i32 = 1 << 20;
+const FT_FACE_FLAG_FIXED_SIZES: i64 = 1 << 1;
+const FT_FACE_FLAG_COLOR: i64 = 1 << 14;
+const FT_PIXEL_MODE_BGRA: u8 = 7;
 
 fn convert_gray_to_bgrx(mut dest: ImgRefMut<BGRA<u8>>, src: ImgRef<u8>, fg_color: BGR<f32>)
 {
@@ -39,6 +55,75 @@ fn convert_gray_to_bgrx(mut dest: ImgRefMut<BGRA<u8>>, src: ImgRef<u8>, fg_color
             dest.b = dest.b.saturating_add((*src as f32 * fg_color.b) as u8);
         }
     }
+}
+
+/*
+ * Source-over blend of a premultiplied BGRA image (what FreeType produces for
+ * color glyphs) onto the destination.
+ */
+fn blend_premultiplied(mut dest: ImgRefMut<BGRA<u8>>, src: ImgRef<BGRA<u8>>)
+{
+    for (d_row, s_row) in iter::zip(dest.rows_mut(), src.rows()) {
+        for (d, s) in iter::zip(d_row, s_row) {
+            let inv = 255 - s.a as u32;
+            d.b = (s.b as u32 + (d.b as u32 * inv + 127) / 255).min(255) as u8;
+            d.g = (s.g as u32 + (d.g as u32 * inv + 127) / 255).min(255) as u8;
+            d.r = (s.r as u32 + (d.r as u32 * inv + 127) / 255).min(255) as u8;
+            d.a = (s.a as u32 + (d.a as u32 * inv + 127) / 255).min(255) as u8;
+        }
+    }
+}
+
+/*
+ * Area-average (box filter) downscale of a premultiplied BGRA image. Averaging
+ * premultiplied values is the correct way to filter alpha images. This is what
+ * keeps emoji readable on small screens; nearest-neighbor looks broken at
+ * 109px -> ~20px.
+ */
+fn downscale_bgra(src: ImgRef<BGRA<u8>>, dw: usize, dh: usize) -> ImgVec<BGRA<u8>>
+{
+    let (sw, sh) = (src.width(), src.height());
+    let xr = sw as f32 / dw as f32;
+    let yr = sh as f32 / dh as f32;
+    let mut out = Vec::with_capacity(dw * dh);
+
+    for dy in 0..dh {
+        let y0 = dy as f32 * yr;
+        let y1 = y0 + yr;
+
+        for dx in 0..dw {
+            let x0 = dx as f32 * xr;
+            let x1 = x0 + xr;
+
+            let mut acc = [0f32; 4];
+            let mut area = 0f32;
+
+            for sy in (y0 as usize)..(y1.ceil() as usize).min(sh) {
+                let wy = y1.min(sy as f32 + 1.0) - y0.max(sy as f32);
+
+                for sx in (x0 as usize)..(x1.ceil() as usize).min(sw) {
+                    let w = wy * (x1.min(sx as f32 + 1.0) - x0.max(sx as f32));
+                    let p = src[(sx, sy)];
+
+                    acc[0] += p.b as f32 * w;
+                    acc[1] += p.g as f32 * w;
+                    acc[2] += p.r as f32 * w;
+                    acc[3] += p.a as f32 * w;
+                    area += w;
+                }
+            }
+
+            let inv = if area > 0.0 { 1.0 / area } else { 0.0 };
+            out.push(BGRA {
+                b: (acc[0] * inv + 0.5) as u8,
+                g: (acc[1] * inv + 0.5) as u8,
+                r: (acc[2] * inv + 0.5) as u8,
+                a: (acc[3] * inv + 0.5) as u8,
+            });
+        }
+    }
+
+    ImgVec::new(out, dw, dh)
 }
 
 fn copy_image(mut dest: ImgRefMut<u8>, src: ImgRef<u8>)
@@ -107,6 +192,22 @@ fn bitmap_to_imgref<'a>(bitmap: &'a freetype::FT_Bitmap) -> ImgRef<'a, u8>
     }
 }
 
+/*
+ * Decide whether a label should be drawn from a color emoji font. The gate is
+ * deliberately narrow: color emoji fonts also contain digits, '#', '*', '(c)'
+ * and some arrows (for keycap and text-style sequences), and those must keep
+ * going through the normal monochrome path. None of the labels in LABELS fall
+ * inside these ranges.
+ */
+fn is_emoji_text(text: &str) -> bool
+{
+    text.chars().any(|c| matches!(c as u32,
+        0x1F000..=0x1FFFF   // pictographs, emoticons, transport, ...
+        | 0x2600..=0x27BF   // misc symbols, dingbats
+        | 0x2B1B | 0x2B1C | 0x2B50 | 0x2B55
+        | 0xFE0F))          // emoji variation selector
+}
+
 #[derive(Clone, Copy)]
 enum Anchor {
     Min,
@@ -122,17 +223,51 @@ pub trait Display {
     fn end(&mut self, x: u32, y: u32, width: u32, height: u32);
 }
 
+enum Pixels {
+    /// Coverage mask, tinted with the label color when drawn.
+    Mask(ImgVec<u8>),
+    /// Premultiplied BGRA, drawn as-is (color emoji).
+    Color(ImgVec<BGRA<u8>>),
+}
+
 struct TextRaster {
-    img: ImgVec<u8>,
+    pixels: Pixels,
     y: usize,
+}
+
+impl TextRaster {
+    fn width(&self) -> usize
+    {
+        match &self.pixels {
+            Pixels::Mask(img) => img.width(),
+            Pixels::Color(img) => img.width(),
+        }
+    }
+
+    fn height(&self) -> usize
+    {
+        match &self.pixels {
+            Pixels::Mask(img) => img.height(),
+            Pixels::Color(img) => img.height(),
+        }
+    }
 }
 
 pub struct Graphics<D: Display> {
     disp: D,
     fonts: Vec<(String, freetype::FT_Long)>,
-    fontbufs: Vec<Vec<u8>>,
+    /*
+     * Lazily opened faces, one slot per entry in `fonts`. None: not opened
+     * yet. Some(0): failed to open. Some(p): FT_Face pointer. Stored as usize
+     * so the struct stays Send, like the AtomicPtr used for `ft`.
+     */
+    faces: Vec<Option<usize>>,
+    /// None: not searched yet. Some(None): no color font installed.
+    color_font: Option<Option<usize>>,
     labels: HashMap<String, TextRaster>,
     sublabels: HashMap<String, TextRaster>,
+    /// (label, sublabel) font sizes the caches above were rendered for.
+    raster_sizes: (u64, u64),
     ft: AtomicPtr<freetype::FT_LibraryRec_>,
 
     x_scale: f64,
@@ -252,13 +387,17 @@ impl<D: Display> Graphics<D> {
             fontfiles.push((fname, idx));
         }
 
+        let faces = fontfiles.iter().map(|_| None).collect();
+
         Graphics {
             disp,
             ft,
             fonts: fontfiles,
-            fontbufs: Vec::new(),
+            faces,
+            color_font: None,
             labels: HashMap::new(),
             sublabels: HashMap::new(),
+            raster_sizes: (0, 0),
 
             x_scale: 0.0,
             y_scale: 0.0,
@@ -276,32 +415,37 @@ impl<D: Display> Graphics<D> {
         }
     }
 
-    fn open_font(&mut self, idx: usize) -> Option<freetype::FT_Face>
+    /*
+     * Open (once) and return the face for fonts[idx]. Faces are kept for the
+     * lifetime of the FreeType library, which frees them in FT_Done_FreeType().
+     *
+     * The face is opened from the path rather than from a Vec<u8> read into
+     * memory, so FreeType can mmap it. This matters for emoji fonts, which are
+     * 10+ MB.
+     */
+    fn face(&mut self, idx: usize) -> Option<freetype::FT_Face>
     {
-        // Read the font if it is not already cached.
-        if self.fontbufs.len() <= idx {
-            let mut f = File::open(&self.fonts[idx].0).ok()?;
-
-            let mut fontbuf = Vec::new();
-            f.read_to_end(&mut fontbuf).ok()?;
-
-            self.fontbufs.push(fontbuf);
+        if idx >= self.fonts.len() {
+            return None;
         }
 
-        let fontbuf = &self.fontbufs[idx];
+        if self.faces[idx].is_none() {
+            let path = CString::new(self.fonts[idx].0.as_bytes()).ok()?;
+            let mut face: freetype::FT_Face = ptr::null_mut();
 
-        unsafe {
-            let mut ftface = std::ptr::null_mut();
-            freetype::FT_New_Memory_Face(*self.ft.get_mut(),
-                                          fontbuf.as_ptr(),
-                                          fontbuf.len() as freetype::FT_Long,
-                                          self.fonts[idx].1 as freetype::FT_Long,
-                                          &mut ftface);
-            if ptr::eq(ftface, ptr::null_mut()) {
-                None
-            } else {
-                Some(ftface)
-            }
+            let err = unsafe {
+                freetype::FT_New_Face(*self.ft.get_mut(),
+                                      path.as_ptr(),
+                                      self.fonts[idx].1,
+                                      &mut face)
+            };
+
+            self.faces[idx] = Some(if err == 0 { face as usize } else { 0 });
+        }
+
+        match self.faces[idx] {
+            Some(p) if p != 0 => Some(p as freetype::FT_Face),
+            _ => None,
         }
     }
 
@@ -325,31 +469,142 @@ impl<D: Display> Graphics<D> {
 
     fn open_font_for_text(&mut self, text: &str) -> Option<freetype::FT_Face>
     {
-        let mut ftface = self.open_font(0);
-        let mut i = 1;
-
-        while !Self::can_font_render_text(ftface, text) {
-            if let Some(ftface) = ftface {
-                unsafe {
-                    freetype::FT_Done_Face(ftface);
+        for i in 0..self.fonts.len() {
+            if let Some(face) = self.face(i) {
+                if Self::can_font_render_text(Some(face), text) {
+                    return Some(face);
                 }
-            }
-
-            ftface = self.open_font(i);
-
-            i += 1;
-            if i >= self.fonts.len() {
-                // Fall back to the first font with placeholder glyphs
-                return self.open_font(0);
             }
         }
 
-        ftface
+        // Fall back to the first usable font with placeholder glyphs.
+        (0..self.fonts.len()).find_map(|i| self.face(i))
+    }
+
+    /// Index of the first installed font with color glyphs (e.g. Noto Color Emoji).
+    fn color_font_idx(&mut self) -> Option<usize>
+    {
+        if self.color_font.is_none() {
+            let found = (0..self.fonts.len()).find(|&i| {
+                self.face(i).map_or(false, |face| unsafe {
+                    ((*face).face_flags as i64) & FT_FACE_FLAG_COLOR != 0
+                })
+            });
+            self.color_font = Some(found);
+        }
+
+        self.color_font.flatten()
+    }
+
+    /*
+     * Rasterize a single color emoji to a premultiplied BGRA image of the
+     * requested size. Returns None when the text is not a (single) emoji, no
+     * color font is installed, or the glyph is not a color bitmap; the caller
+     * then falls back to the monochrome path.
+     *
+     * Multi-codepoint sequences (skin tones, ZWJ families, flags) need text
+     * shaping to select the right glyph, which FreeType alone cannot do, so
+     * they are not handled here.
+     */
+    fn rasterize_color(&mut self, size: f64, text: &str) -> Option<TextRaster>
+    {
+        if !is_emoji_text(text) {
+            return None;
+        }
+
+        // Variation selectors do not change which glyph the font has.
+        let mut chars = text.chars().filter(|&c| c != '\u{FE0F}' && c != '\u{FE0E}');
+        let ch = chars.next()?;
+        if chars.next().is_some() {
+            return None;
+        }
+
+        let idx = self.color_font_idx()?;
+        let face = self.face(idx)?;
+        let target = ((size * EMOJI_SCALE).round() as i32).max(8);
+
+        let img = unsafe {
+            if freetype::FT_Get_Char_Index(face, ch.into()) == 0 {
+                return None;
+            }
+
+            if ((*face).face_flags as i64) & FT_FACE_FLAG_FIXED_SIZES != 0
+                && (*face).num_fixed_sizes > 0
+            {
+                /*
+                 * Bitmap fonts (CBDT/sbix) have fixed strikes and reject
+                 * FT_Set_Pixel_Sizes() with "invalid pixel size". Select the
+                 * smallest strike that is at least as big as the target (or
+                 * the biggest one) and scale the result ourselves.
+                 */
+                let sizes = std::slice::from_raw_parts((*face).available_sizes,
+                                                       (*face).num_fixed_sizes as usize);
+                let strike = sizes.iter().enumerate()
+                    .filter(|&(_, s)| s.height as i32 >= target)
+                    .min_by_key(|&(_, s)| s.height)
+                    .or_else(|| sizes.iter().enumerate().max_by_key(|&(_, s)| s.height))
+                    .map(|(i, _)| i)?;
+
+                if freetype::FT_Select_Size(face, strike as _) != 0 {
+                    return None;
+                }
+            } else if freetype::FT_Set_Pixel_Sizes(face, 0, target as _) != 0 {
+                return None;
+            }
+
+            if freetype::FT_Load_Char(face, ch.into(), FT_LOAD_COLOR | FT_LOAD_RENDER) != 0 {
+                return None;
+            }
+
+            let bm = &(*(*face).glyph).bitmap;
+            let (w, h, pitch) = (bm.width as usize, bm.rows as usize, bm.pitch as isize);
+
+            if bm.pixel_mode != FT_PIXEL_MODE_BGRA
+                || w == 0 || h == 0 || pitch <= 0 || bm.buffer.is_null()
+            {
+                return None;
+            }
+
+            let bytes = std::slice::from_raw_parts(bm.buffer, pitch as usize * h);
+            let mut px = Vec::with_capacity(w * h);
+
+            for row in bytes.chunks(pitch as usize) {
+                for p in row[..w * 4].chunks_exact(4) {
+                    px.push(BGRA { b: p[0], g: p[1], r: p[2], a: p[3] });
+                }
+            }
+
+            ImgVec::new(px, w, h)
+        };
+
+        let (w, h) = (img.width(), img.height());
+        let img = if h as i32 == target {
+            img
+        } else {
+            let dh = target as usize;
+            let dw = (w * dh / h).max(1);
+            downscale_bgra(img.as_ref(), dw, dh)
+        };
+
+        Some(TextRaster {
+            pixels: Pixels::Color(img),
+            y: 0,
+        })
     }
 
     fn rasterize_text(&mut self, size: f64, text: &str) -> TextRaster
     {
-        let ftface = self.open_font_for_text(text).unwrap();
+        let ftface = match self.open_font_for_text(text) {
+            Some(face) => face,
+            None => {
+                // No usable font at all: draw nothing instead of panicking.
+                return TextRaster {
+                    pixels: Pixels::Mask(ImgVec::new(vec![0], 1, 1)),
+                    y: 0,
+                };
+            }
+        };
+
         unsafe {
             freetype::FT_Set_Char_Size(ftface, (size * 64.0) as i64, 0, 0, 0);
         };
@@ -368,7 +623,13 @@ impl<D: Display> Graphics<D> {
         let stride = if text.is_empty() {
             1
         } else {
-            metrics.max_advance as usize / 64 * (text.len() - 1) + glyph_width
+            /*
+             * Upper bound on the pen position plus the last glyph's box. The
+             * font-wide bbox/max_advance are only estimates, so be generous
+             * (n advances, not n - 1) and clamp `width` below.
+             */
+            let n = text.chars().count();
+            (metrics.max_advance as usize / 64 + 1) * n + glyph_width + 2
         };
 
         let y_max = cmp::max(metrics.ascender as isize / 64,
@@ -424,9 +685,7 @@ impl<D: Display> Graphics<D> {
             pen += glyph.advance.x as isize / 64;
         }
 
-        unsafe {
-            freetype::FT_Done_Face(ftface);
-        };
+        // The face is cached and owned by FreeType; do not FT_Done_Face() it.
 
         if height == 0 {
             height = 1;
@@ -434,14 +693,31 @@ impl<D: Display> Graphics<D> {
         if width == 0 {
             width = 1;
         }
+        // imgref requires stride >= width.
+        width = width.min(stride.max(1));
 
         let mut vec = img.into_buf();
-        vec.truncate(stride.saturating_mul(height));
+        let needed = stride.saturating_mul(height);
+        vec.resize(needed, 0); // truncates or zero-pads
         let img = ImgVec::new_stride(vec, width, height, stride);
 
         TextRaster {
-            img,
+            pixels: Pixels::Mask(img),
             y,
+        }
+    }
+
+    fn rasterize_any(&mut self, size: f64, label: &str) -> TextRaster
+    {
+        let size = if Self::is_label_small(label) {
+            size * 0.75
+        } else {
+            size
+        };
+
+        match self.rasterize_color(size, label) {
+            Some(raster) => raster,
+            None => self.rasterize_text(size, label),
         }
     }
 
@@ -457,47 +733,36 @@ impl<D: Display> Graphics<D> {
     fn rasterize_label(&mut self, size: f64, label: &str)
     {
         if !self.labels.contains_key(label) {
-            let size = if Self::is_label_small(label) {
-                size * 0.75
-            } else {
-                size
-            };
-
-            let img = self.rasterize_text(size, label);
+            let img = self.rasterize_any(size, label);
             self.labels.insert(String::from(label), img);
         }
     }
 
-    /*
-     * Rasterize a key symbol and store it in the sublabels hash table.
-     *
-     * We need two functions, one for labels and one for sublabels, in order to
-     * borrow the hash tables mutably. The text rasterizing operation borrows
-     * the self as mutable to store fonts for later use. Since the self and hash
-     * table cannot be mutable at the same time, this cannot be abstracted to a
-     * mutable self and mutable hash table.
-     */
+    /* Same as rasterize_label(), for the sublabels hash table. */
     fn rasterize_sublabel(&mut self, size: f64, label: &str)
     {
         if !self.sublabels.contains_key(label) {
-            let size = if Self::is_label_small(label) {
-                size * 0.75
-            } else {
-                size
-            };
-
-            let img = self.rasterize_text(size, label);
+            let img = self.rasterize_any(size, label);
             self.sublabels.insert(String::from(label), img);
         }
     }
 
     fn rasterize_labels(&mut self, layout: &Layout)
     {
-        self.labels = HashMap::new();
-        self.sublabels = HashMap::new();
-
         let label_size = self.y_scale * 0.33;
         let sublabel_size = self.y_scale * 0.22;
+
+        /*
+         * Keep rasterized labels across layout changes and only throw them
+         * away when the font size changed. Re-rasterizing (and especially
+         * scaling emoji) is the expensive part.
+         */
+        let sizes = (label_size.to_bits(), sublabel_size.to_bits());
+        if self.raster_sizes != sizes {
+            self.labels.clear();
+            self.sublabels.clear();
+            self.raster_sizes = sizes;
+        }
 
         for row in layout.rows() {
             self.labels.reserve(row.len());
@@ -523,8 +788,9 @@ impl<D: Display> Graphics<D> {
         let src = labels.get(label)
                         .expect("Layout and size should be set before drawing");
 
-        let width = src.img.width();
-        let height = src.img.height().saturating_sub(src.y);
+        let full_height = src.height();
+        let width = src.width();
+        let height = full_height.saturating_sub(src.y);
 
         let x = match x_anchor {
             Anchor::Min => SUBLABEL_MARGIN,
@@ -538,7 +804,7 @@ impl<D: Display> Graphics<D> {
             Anchor::Max => dest.height().saturating_sub(height + SUBLABEL_MARGIN),
         };
 
-        let src_y = src.y.min(src.img.height());
+        let src_y = src.y.min(full_height);
         let draw_w = width.min(dest.width().saturating_sub(x));
         let draw_h = height.min(dest.height().saturating_sub(y));
 
@@ -546,10 +812,18 @@ impl<D: Display> Graphics<D> {
             return;
         }
 
-        let src = src.img.sub_image(0, src_y, draw_w, draw_h);
         let dest = dest.sub_image_mut(x, y, draw_w, draw_h);
 
-        convert_gray_to_bgrx(dest, src, fg_color);
+        match &src.pixels {
+            Pixels::Mask(img) => {
+                let src = img.sub_image(0, src_y, draw_w, draw_h);
+                convert_gray_to_bgrx(dest, src, fg_color);
+            }
+            Pixels::Color(img) => {
+                let src = img.sub_image(0, src_y, draw_w, draw_h);
+                blend_premultiplied(dest, src);
+            }
+        }
     }
 
     fn keypart_to_color(part: &Part, sublabel: bool,
@@ -732,6 +1006,7 @@ impl<D: Display> Graphics<D> {
 impl<D: Display> Drop for Graphics<D> {
     fn drop(&mut self)
     {
+        // Also frees all faces opened through face().
         unsafe {
             freetype::FT_Done_FreeType(*self.ft.get_mut());
         }
