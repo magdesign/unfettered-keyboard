@@ -135,7 +135,7 @@ impl Surface {
         let surface = self.comp.create_surface(&self.queue, ());
 
         let layer_surf = self.layer_shell.get_layer_surface(&surface, None,
-                                                            zwlr_layer_shell_v1::Layer::Top,
+                                                            zwlr_layer_shell_v1::Layer::Overlay,
                                                             String::from("osk"),
                                                             &self.queue, ());
 
