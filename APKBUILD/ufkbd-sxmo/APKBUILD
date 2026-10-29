@@ -1,0 +1,49 @@
+pkgname=ufkbd-sxmo
+pkgver=4.2.1
+pkgrel=0
+pkgdesc="Unfettered keyboard sxmo version"
+url="https://github.com/magdesign/unfettered-keyboard"
+arch="aarch64"
+license="GPL-3.0-only"
+depends=""
+makedepends="cargo rust git"
+install=""
+subpackages=""
+source=""
+builddir="$srcdir/$pkgname-$pkgver"
+
+build() {
+  cd "$srcdir"
+  git clone --depth 1 https://github.com/magdesign/unfettered-keyboard.git
+  cd "$srcdir/unfettered-keyboard"
+
+  cargo build --release --bin ufkbd-sxmo
+}
+
+package() {
+  cd "$srcdir/unfettered-keyboard"
+
+  install -Dm755 target/release/ufkbd-sxmo "$pkgdir/usr/bin/ufkbd-sxmo"
+
+ # get the neede layouts
+ sudo mkdir -p /usr/share/unfettered-keyboard/layouts
+
+ curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/latn_qwerty_us.xml
+ sudo install -m 0644 latn_qwerty_us.xml /usr/share/unfettered-keyboard/layouts/
+
+ curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/bottom_row.xml
+ sudo install -m 0644 bottom_row.xml /usr/share/unfettered-keyboard/layouts/
+
+ curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/numeric.xml
+ sudo install -m 0644 numeric.xml /usr/share/unfettered-keyboard/layouts/
+
+ curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/greekmath.xml
+ sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
+
+ curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/emoji.xml
+ sudo install -m 0644 emoji.xml /usr/share/unfettered-keyboard/layouts/
+
+}
+
+
+
