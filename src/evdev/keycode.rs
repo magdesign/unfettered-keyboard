@@ -6,7 +6,7 @@
 use evdev::KeyCode;
 use xkeysym::Keysym;
 
-pub const STATIC_KEYCODES: [(Keysym, KeyCode); 77] = [
+pub const STATIC_KEYCODES: [(Keysym, KeyCode); 78] = [
     (Keysym::space, KeyCode::KEY_SPACE),
     (Keysym::apostrophe, KeyCode::KEY_APOSTROPHE),
     (Keysym::comma, KeyCode::KEY_COMMA),
@@ -84,4 +84,5 @@ pub const STATIC_KEYCODES: [(Keysym, KeyCode); 77] = [
     (Keysym::Control_L, KeyCode::KEY_LEFTCTRL),
     (Keysym::Alt_L, KeyCode::KEY_LEFTALT),
     (Keysym::Delete, KeyCode::KEY_DELETE),
+    (Keysym::Print, KeyCode::KEY_SYSRQ),
 ];

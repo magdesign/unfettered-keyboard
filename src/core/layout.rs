@@ -526,7 +526,7 @@ impl Key {
     }
 }
 
-const KEYSYMS: [(&str, Keysym, &str); 26] = [
+const KEYSYMS: [(&str, Keysym, &str); 27] = [
     ("\\#", Keysym::numbersign, "#"),
     ("\\?", Keysym::question, "?"),
     ("\\@", Keysym::at, "@"),
@@ -553,6 +553,7 @@ const KEYSYMS: [(&str, Keysym, &str); 26] = [
     ("switch_text", Keysym::Caps_Lock, "ABC"),
     ("tab", Keysym::Tab, "⭾"),
     ("up", Keysym::Up, "↑"),
+    ("print", Keysym::Print, "PrtScn"),
 ];
 
 #[derive(Clone)]
