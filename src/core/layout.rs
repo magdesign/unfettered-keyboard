@@ -322,6 +322,7 @@ impl Part {
     fn keyvalue_has_text(val: &KeyValue) -> bool
     {
         match val {
+            KeyValue(Keysym::Print, _) => false,
             KeyValue(Keysym::BackSpace, _) => false,
             KeyValue(Keysym::Tab, _) => false,
             KeyValue(Keysym::Return, _) => false,
