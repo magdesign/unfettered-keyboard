@@ -39,7 +39,7 @@
     <key width="1.5" key0="switch_text" key1="loc esc"/>
     <key width="1.2" key0="switch_numeric" key2="loc tab"/>
     <key width="4.4" key0="space" key5="left" key6="right"/>
-    <key width="1.2" key0="loc compose" key7="up" key6="right" key5="left" key8="down"/>
+    <key width="1.2" key0="print"/>
     <key width="1.7" key0="enter"/>
   </row>
 </keyboard>
