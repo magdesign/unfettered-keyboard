@@ -68,6 +68,7 @@ pub const STATIC_KEYCODES: [(Keysym, KeyCode); 78] = [
     (Keysym::Next, KeyCode::KEY_PAGEDOWN),
     (Keysym::End, KeyCode::KEY_END),
     (Keysym::Insert, KeyCode::KEY_INSERT),
+    (Keysym::Print, KeyCode::KEY_SYSRQ),
     (Keysym::F1, KeyCode::KEY_F1),
     (Keysym::F2, KeyCode::KEY_F2),
     (Keysym::F3, KeyCode::KEY_F3),
@@ -84,5 +85,4 @@ pub const STATIC_KEYCODES: [(Keysym, KeyCode); 78] = [
     (Keysym::Control_L, KeyCode::KEY_LEFTCTRL),
     (Keysym::Alt_L, KeyCode::KEY_LEFTALT),
     (Keysym::Delete, KeyCode::KEY_DELETE),
-    (Keysym::Print, KeyCode::KEY_SYSRQ),
 ];

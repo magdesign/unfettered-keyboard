@@ -543,6 +543,7 @@ const KEYSYMS: [(&str, Keysym, &str); 27] = [
     ("fn", Keysym::XF86_Fn, "Fn"),
     ("left", Keysym::Left, "←"),
     ("meta", Keysym::Meta_L, "Meta"),
+    ("print", Keysym::Print, "PrtScn"),
     ("right", Keysym::Right, "→"),
     ("shift", Keysym::Shift_L, "⇧"),
     ("space", Keysym::space, " "),
@@ -553,7 +554,6 @@ const KEYSYMS: [(&str, Keysym, &str); 27] = [
     ("switch_text", Keysym::Caps_Lock, "ABC"),
     ("tab", Keysym::Tab, "⭾"),
     ("up", Keysym::Up, "↑"),
-    ("print", Keysym::Print, "PrtScn"),
 ];
 
 #[derive(Clone)]
