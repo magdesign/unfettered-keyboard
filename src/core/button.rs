@@ -379,8 +379,8 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         });
         self.timers.push_back(id);
 
-        let key = self.layout.locate_key(x, y).unwrap();
-        Self::draw(draw, &self.gfx, &self.layout, Some(key), &self.modifiers);
+        let key = self.layout.locate_key(x, y);
+        Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
     }
 
     fn update_pressed_part(press: &mut Press, key: &Key, angle: usize)
@@ -500,8 +500,8 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         draw.combine(self.try_press_mod(modifier2));
 
         let press = self.presses[id].as_ref().unwrap();
-        let key = self.layout.locate_key(press.x1, press.y1).unwrap();
-        Self::draw(draw, &self.gfx, &self.layout, Some(key), &self.modifiers);
+        let key = self.layout.locate_key(press.x1, press.y1);
+        Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
     }
 
     fn emit(kbd: &mut K, part: &Part, modifiers: &[ModState])
@@ -655,8 +655,8 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         draw.combine(self.release_layout_switcher(keysym));
 
         let press = self.presses[id].as_ref().unwrap();
-        let key = self.layout.locate_key(press.x1, press.y1).unwrap();
-        Self::draw(draw, &self.gfx, &self.layout, Some(key), &self.modifiers);
+        let key = self.layout.locate_key(press.x1, press.y1);
+        Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
 
         self.remove_timer(id);
         self.presses[id] = None;
