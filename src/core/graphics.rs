@@ -46,6 +46,40 @@ const FT_FACE_FLAG_FIXED_SIZES: i64 = 1 << 1;
 const FT_FACE_FLAG_COLOR: i64 = 1 << 14;
 const FT_PIXEL_MODE_BGRA: u8 = 7;
 
+/* Integer floor(sqrt(n)). */
+const fn isqrt(n: usize) -> usize
+{
+    let mut x = 0;
+    while (x + 1) * (x + 1) <= n {
+        x += 1;
+    }
+    x
+}
+
+/*
+ * Horizontal inset of a rounded corner for each row, indexed by dy, the
+ * distance in rows from the arc's center line (dy = 0 is the straight part,
+ * dy = KEYCAP_RADIUS is the outermost row):
+ *
+ *     inset(dy) = ceil(r - sqrt(r^2 - dy^2)) = r - floor(sqrt(r^2 - dy^2))
+ *
+ * Computed at compile time with integer math.
+ */
+const fn corner_insets() -> [usize; KEYCAP_RADIUS + 1]
+{
+    let mut table = [0; KEYCAP_RADIUS + 1];
+    let mut dy = 0;
+
+    while dy <= KEYCAP_RADIUS {
+        table[dy] = KEYCAP_RADIUS - isqrt(KEYCAP_RADIUS * KEYCAP_RADIUS - dy * dy);
+        dy += 1;
+    }
+
+    table
+}
+
+const KEYCAP_INSETS: [usize; KEYCAP_RADIUS + 1] = corner_insets();
+
 fn convert_gray_to_bgrx(mut dest: ImgRefMut<BGRA<u8>>, src: ImgRef<u8>, fg_color: BGR<f32>)
 {
     for (dest, src) in iter::zip(dest.rows_mut(), src.rows()) {
@@ -151,31 +185,34 @@ fn fill_rounded_rect(dest: &mut ImgRefMut<BGRA<u8>>, src: BGRA<u8>, radius: usiz
     let height = dest.height();
     let radius = radius.min(width / 2).min(height / 2);
 
-    for y in 0..height {
-        for x in 0..width {
-            let in_corner = if x < radius && y < radius {
-                (x as isize - radius as isize).pow(2) + (y as isize - radius as isize).pow(2)
-                    <= (radius as isize).pow(2)
-            } else if x >= width - radius && y < radius {
-                (x as isize - (width - radius) as isize).pow(2)
-                    + (y as isize - radius as isize).pow(2)
-                    <= (radius as isize).pow(2)
-            } else if x < radius && y >= height - radius {
-                (x as isize - radius as isize).pow(2)
-                    + (y as isize - (height - radius) as isize).pow(2)
-                    <= (radius as isize).pow(2)
-            } else if x >= width - radius && y >= height - radius {
-                (x as isize - (width - radius) as isize).pow(2)
-                    + (y as isize - (height - radius) as isize).pow(2)
-                    <= (radius as isize).pow(2)
-            } else {
-                true
-            };
-
-            if in_corner {
-                dest[(x, y)] = src;
-            }
+    /*
+     * Normally radius == KEYCAP_RADIUS and the compile-time table is used. A
+     * clamped radius (very small keys) falls back to integer math per row.
+     */
+    let inset = |dy: usize| {
+        if radius == KEYCAP_RADIUS {
+            KEYCAP_INSETS[dy]
+        } else {
+            radius - isqrt(radius * radius - dy * dy)
         }
+    };
+
+    for (y, row) in dest.rows_mut().enumerate() {
+        // Rows from the arc's center line: 0 in the straight middle section,
+        // 1..=radius in the top and bottom corner rows (symmetric).
+        let dy = if y < radius {
+            radius - y
+        } else if y >= height - radius {
+            y - (height - radius) + 1
+        } else {
+            0
+        };
+
+        // x1 <= radius <= width / 2, so x2 can't underflow or cross x1.
+        let x1 = inset(dy);
+        let x2 = width - x1;
+
+        row[x1..x2].fill(src);
     }
 }
 
