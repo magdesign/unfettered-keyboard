@@ -844,6 +844,10 @@ impl Layout {
 
     pub fn locate_key(&self, x: f64, y: f64) -> Option<&Key>
     {
+        if y < 0. || y as usize >= self.rows.len() {
+            return None;
+        }
+
         let row = &self.rows[y as usize];
         let res = row.binary_search_by(|k| {
             if k.x2 < x {
@@ -863,6 +867,10 @@ impl Layout {
 
     pub fn locate_key_mut(&mut self, x: f64, y: f64) -> Option<&mut Key>
     {
+        if y < 0. || y as usize >= self.rows.len() {
+            return None;
+        }
+
         let row = &mut self.rows[y as usize];
         let res = row.binary_search_by(|k| {
             if k.x2 < x {
