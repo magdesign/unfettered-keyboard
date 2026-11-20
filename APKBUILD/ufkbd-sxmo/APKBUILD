@@ -1,5 +1,5 @@
 pkgname=ufkbd-sxmo
-pkgver=4.2.1
+pkgver=4.2.2
 pkgrel=1
 pkgdesc="Unfettered keyboard sxmo version"
 url="https://github.com/magdesign/unfettered-keyboard"
