@@ -3,6 +3,7 @@
  * Copyright (c) 2024, Unfettered Keyboard Contributors
  */
 
+use std::convert::TryFrom;
 use std::convert::TryInto;
 use std::fmt::Debug;
 use std::fmt::Display;
@@ -120,6 +121,8 @@ pub struct Configuration {
     extra_keys: Vec<String>,
     evfb_height: f64,
     wayland_height: i32,
+    // Used instead of wayland_height with --landscape, if set.
+    wayland_height_landscape: Option<i32>,
     wayland_im_enable: bool,
 
     colors: KeyboardColors,
@@ -145,19 +148,29 @@ impl Configuration {
         Ok(())
     }
 
+    // A surface height in pixels: a positive 31-bit integer.
+    fn parse_height(yaml: &Yaml, field: &'static str) -> Result<i32, ConfigurationError>
+    {
+        yaml.as_i64()
+            .and_then(|h| i32::try_from(h).ok())
+            .filter(|&h| h > 0)
+            .ok_or(ConfigurationError::TypeError {
+                field,
+                expected: "positive 31-bit integer",
+            })
+    }
+
     fn load_wayland(&mut self, yaml: &Hash) -> Result<(), ConfigurationError>
     {
         let height = yaml.get(&Yaml::String(String::from("height")));
         if let Some(height) = height {
-            let height = match height.as_i64() {
-                Some(h) => h.try_into().ok(),
-                None => None,
-            };
-            let height = height.ok_or(ConfigurationError::TypeError {
-                field: "wayland.height",
-                expected: "31-bit integer",
-            })?;
-            self.wayland_height = height;
+            self.wayland_height = Self::parse_height(height, "wayland.height")?;
+        }
+
+        let height = yaml.get(&Yaml::String(String::from("height_landscape")));
+        if let Some(height) = height {
+            let height = Self::parse_height(height, "wayland.height_landscape")?;
+            self.wayland_height_landscape = Some(height);
         }
 
         let im_enable = yaml.get(&Yaml::String(String::from("input-method")));
@@ -291,6 +304,7 @@ impl Configuration {
                 String::from("tab"),
             ],
             wayland_height: 185,
+            wayland_height_landscape: None,
             wayland_im_enable: true,
             evfb_height: 0.25,
 
@@ -475,6 +489,22 @@ impl Configuration {
         self.wayland_height
     }
 
+    /*
+     * Use the landscape height (wayland.height_landscape) instead of the
+     * normal one. Returns false and keeps the normal height if none is set.
+     */
+    #[allow(dead_code)]
+    pub fn use_landscape_height(&mut self) -> bool
+    {
+        match self.wayland_height_landscape {
+            Some(height) => {
+                self.wayland_height = height;
+                true
+            },
+            None => false,
+        }
+    }
+
     #[inline(always)]
     pub fn wayland_im_enable(&self) -> bool
     {
@@ -572,5 +602,24 @@ mod tests {
         assert_eq!(find(), Some(home_new));
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn landscape_height()
+    {
+        let mut cfg = parse("wayland: { height: 185, height_landscape: 120 }").unwrap();
+        assert_eq!(cfg.wayland_height(), 185);
+        assert!(cfg.use_landscape_height());
+        assert_eq!(cfg.wayland_height(), 120);
+
+        // Without a landscape height, the normal one stays.
+        let mut cfg = parse("wayland: { height: 200 }").unwrap();
+        assert!(!cfg.use_landscape_height());
+        assert_eq!(cfg.wayland_height(), 200);
+
+        for bad in ["0", "-5", "3000000000", "tall"] {
+            assert!(parse(&format!("wayland: {{ height: {} }}", bad)).is_err(), "{}", bad);
+            assert!(parse(&format!("wayland: {{ height_landscape: {} }}", bad)).is_err(), "{}", bad);
+        }
     }
 }

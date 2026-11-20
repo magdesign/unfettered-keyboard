@@ -17,20 +17,46 @@ use std::process::ExitCode;
 use std::time::Instant;
 use wayland_client::globals;
 
+const USAGE: &str = "\
+Usage: ufkbd-wl [--landscape]
+
+Options:
+  --landscape  use wayland.height_landscape from ufkbd.yaml instead of
+               wayland.height
+  -h, --help   show this help";
+
 fn main() -> ExitCode
 {
+    let mut landscape = false;
+
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--landscape" => landscape = true,
+            "-h" | "--help" => {
+                println!("{}", USAGE);
+                return ExitCode::SUCCESS;
+            },
+            // Unknown arguments were always ignored; keep launchers working.
+            _ => eprintln!("warn: ignoring unknown argument {:?}", arg),
+        }
+    }
+
     let conn = wayland_client::Connection::connect_to_env().unwrap();
 
     let (globals, mut queue) = globals::registry_queue_init::<Dispatcher>(&conn)
                                             .expect("Registry required");
 
-    let config = match Configuration::load() {
+    let mut config = match Configuration::load() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("{}", e);
             return ExitCode::FAILURE;
         },
     };
+
+    if landscape && !config.use_landscape_height() {
+        eprintln!("warn: --landscape given but wayland.height_landscape is not set, using wayland.height");
+    }
 
     let mut dispatcher = Dispatcher::new(&config, queue.handle(), &globals).unwrap();
 

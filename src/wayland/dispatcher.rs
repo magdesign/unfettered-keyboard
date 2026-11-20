@@ -35,6 +35,7 @@ use reis::ei::seat;
 use std::fmt::Debug;
 use std::fmt::Formatter;
 use std::io::Error;
+use std::process;
 use std::sync::Arc;
 use std::sync::Mutex;
 use wayland_client::Connection;
@@ -701,6 +702,19 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for Dispatcher {
             zwp_input_method_v2::Event::SurroundingText { .. } => (),
             zwp_input_method_v2::Event::Done => {
                 ctx.seat.keyboard_mut().done();
+            },
+            zwp_input_method_v2::Event::Unavailable => {
+                /*
+                 * Only one input method can exist per seat, usually because
+                 * another keyboard is running. Without a D-Bus interface or
+                 * launcher to show it, this keyboard would never appear.
+                 */
+                if ctx.osk.is_none() {
+                    eprintln!("error: the input method is unavailable; is another keyboard already running?");
+                    process::exit(1);
+                }
+
+                eprintln!("warn: the input method is unavailable; is another keyboard already running?");
             },
             _ => eprintln!("warn: unknown zwp_input_method_v2 event emitted"),
         }

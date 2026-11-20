@@ -92,6 +92,13 @@ The `ufkbd-wl` build target is for most compatible Wayland compositors.
 Configure your desired keyboard to run on startup. This may mean a desktop file
 in `~/.config/autostart`.
 
+### Landscape height
+
+Started as `ufkbd-wl --landscape`, the keyboard uses `wayland.height_landscape`
+from the configuration file instead of `wayland.height`, e.g. for a launcher
+that restarts it when the screen rotates. Without the option, or if
+`height_landscape` is not set, `wayland.height` is used.
+
 ## TTYescape
 
 In the TTY, on-screen keyboards can emit key presses with uinput. A special
@@ -192,6 +199,7 @@ Configuration example (with defaults):
 
     wayland:
       height: 185
+      # height_landscape: 120 # Used instead of height with ufkbd-wl --landscape
       input-method: true
 
     extra_keys:
