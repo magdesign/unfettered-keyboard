@@ -96,6 +96,15 @@ impl Surface {
         self.surface.is_some()
     }
 
+    /*
+     * Whether the layer surface is the one currently shown. Events for a
+     * layer surface destroyed by hide() can still be queued.
+     */
+    pub fn is_current(&self, layer_surf: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1) -> bool
+    {
+        self.layer_surf.as_ref() == Some(layer_surf)
+    }
+
     pub fn ack_configure(&mut self, serial: u32)
     {
         self.configured = true;

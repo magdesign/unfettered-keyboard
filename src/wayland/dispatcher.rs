@@ -566,7 +566,7 @@ impl Dispatch<zwlr_layer_shell_v1::ZwlrLayerShellV1, ()> for Dispatcher {
 
 impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Dispatcher {
     fn event(ctx: &mut Dispatcher,
-             _surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
+             surface: &zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
              evt: zwlr_layer_surface_v1::Event,
              _data: &(),
              _conn: &Connection,
@@ -575,6 +575,15 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Dispatcher {
         match evt {
             zwlr_layer_surface_v1::Event::Configure { width, height, serial } => {
                 let mut gfx = ctx.gfx.lock().unwrap();
+
+                /*
+                 * A configure sent before the keyboard was hidden (and maybe
+                 * shown again with a new surface) is for a destroyed surface.
+                 * Acknowledging it would crash or ack the wrong surface.
+                 */
+                if !gfx.display().is_current(surface) {
+                    return;
+                }
 
                 gfx.display_mut().ack_configure(serial);
 
@@ -593,6 +602,15 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for Dispatcher {
 
                 ctx.seat.set_scale(layout.width() / width,
                                    layout.height() / height);
+            },
+            zwlr_layer_surface_v1::Event::Closed => {
+                // The compositor removed the surface; drop it so it can be shown again.
+                // Not holding the lock while cancelling, which redraws.
+                let current = ctx.gfx.lock().unwrap().display().is_current(surface);
+                if current {
+                    ctx.seat.cancel_all();
+                    ctx.gfx.lock().unwrap().display_mut().hide();
+                }
             },
             _ => eprintln!("warn: unknown zwlr_layer_surface_v1 event emitted"),
         }
