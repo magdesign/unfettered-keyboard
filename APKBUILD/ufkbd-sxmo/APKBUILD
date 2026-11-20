@@ -25,25 +25,7 @@ package() {
 
   install -Dm755 target/release/ufkbd-sxmo "$pkgdir/usr/bin/ufkbd-sxmo"
 
- # get the neede layouts
- sudo mkdir -p /usr/share/unfettered-keyboard/layouts
-
- curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/latn_qwerty_us.xml
- sudo install -m 0644 latn_qwerty_us.xml /usr/share/unfettered-keyboard/layouts/
-
- curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/bottom_row.xml
- sudo install -m 0644 bottom_row.xml /usr/share/unfettered-keyboard/layouts/
-
- curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/numeric.xml
- sudo install -m 0644 numeric.xml /usr/share/unfettered-keyboard/layouts/
-
- curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/greekmath.xml
- sudo install -m 0644 greekmath.xml /usr/share/unfettered-keyboard/layouts/
-
- curl -fLO https://github.com/magdesign/unfettered-keyboard/raw/refs/heads/main/resources/layouts/emoji.xml
- sudo install -m 0644 emoji.xml /usr/share/unfettered-keyboard/layouts/
-
+  # The layouts are part of the package, installed with it by apk.
+  install -Dm644 resources/layouts/*.xml \
+    -t "$pkgdir/usr/share/unfettered-keyboard/layouts/"
 }
-
-
-
