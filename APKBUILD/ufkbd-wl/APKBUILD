@@ -1,6 +1,6 @@
 pkgname=ufkbd-wl
 pkgver=4.2.3
-pkgrel=1
+pkgrel=0
 pkgdesc="Unfettered keyboard wl version"
 url="https://github.com/magdesign/unfettered-keyboard"
 arch="aarch64"
