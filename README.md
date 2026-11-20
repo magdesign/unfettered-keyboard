@@ -165,9 +165,16 @@ sudo install -m 0644 emoji.xml /usr/share/unfettered-keyboard/layouts/
 # Configuration
 
 This keyboard is configured with [YAML](https://yaml.org). The configuration
-file can either be user-specific in `$HOME/.config/unfettered-keyboard.yaml` or
-system-wide in `/etc/xdg/unfettered-keyboard.yaml`. System-wide configuration
+file can either be user-specific in `$HOME/.config/ufkbd/ufkbd.yaml` or
+system-wide in `/etc/xdg/ufkbd/ufkbd.yaml`. System-wide configuration
 doesn't apply if there is a user configuration file.
+
+The old location (`$HOME/.config/unfettered-keyboard.yaml` or
+`/etc/xdg/unfettered-keyboard.yaml`) is still read, with a warning. To move an
+existing configuration:
+
+    mkdir -p ~/.config/ufkbd
+    mv ~/.config/unfettered-keyboard.yaml ~/.config/ufkbd/ufkbd.yaml
 
 The configuration file does not need to exist, and can be empty or omit any
 values. The YAML header is also optional.

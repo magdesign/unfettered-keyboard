@@ -8,6 +8,7 @@ use std::fmt::Debug;
 use std::fmt::Display;
 use std::fmt::Formatter;
 use std::fs::File;
+use std::path::PathBuf;
 use rgb::alt::BGR;
 use rgb::alt::BGRA;
 use rgb::RGB;
@@ -15,6 +16,11 @@ use yaml_rust2::yaml::Hash;
 use yaml_rust2::yaml::LoadError;
 use yaml_rust2::yaml::YamlDecoder;
 use yaml_rust2::yaml::Yaml;
+
+// Relative to $XDG_CONFIG_HOME (~/.config) and $XDG_CONFIG_DIRS (/etc/xdg).
+const CONFIG_FILE: &str = "ufkbd/ufkbd.yaml";
+// The old name, still read so existing configurations keep working.
+const LEGACY_CONFIG_FILE: &str = "unfettered-keyboard.yaml";
 
 #[derive(Debug)]
 pub enum ConfigurationError {
@@ -31,7 +37,7 @@ impl Display for ConfigurationError {
         match self {
             Self::YamlError(LoadError::Scan(e)) => {
                 let marker = e.marker();
-                write!(fmt, "unfettered-keyboard.yaml:{}:{}: {}",
+                write!(fmt, "ufkbd.yaml:{}:{}: {}",
                        marker.line(), marker.col(), e.info())?;
             },
             Self::YamlError(e) => {
@@ -229,10 +235,44 @@ impl Configuration {
         Ok(())
     }
 
-    fn get_configuration_file() -> Result<File, Box<dyn std::error::Error>> 
+    /*
+     * Find the configuration file: ufkbd/ufkbd.yaml in the user's config
+     * directory, then in the system-wide ones (e.g. /etc/xdg). The file's old
+     * name is still read, but a user file always wins over a system one.
+     */
+    fn find_configuration_file() -> Option<PathBuf>
     {
         let xdg_dirs = xdg::BaseDirectories::new();
-        let config_file = xdg_dirs.find_config_file("unfettered-keyboard.yaml")
+        let dirs = xdg_dirs.get_config_home().into_iter()
+                           .chain(xdg_dirs.get_config_dirs());
+
+        Self::find_configuration_file_in(dirs)
+    }
+
+    // Directories are searched in order, most important first.
+    fn find_configuration_file_in<I>(dirs: I) -> Option<PathBuf>
+        where I: IntoIterator<Item = PathBuf>
+    {
+        for dir in dirs {
+            let path = dir.join(CONFIG_FILE);
+            if path.is_file() {
+                return Some(path);
+            }
+
+            let legacy = dir.join(LEGACY_CONFIG_FILE);
+            if legacy.is_file() {
+                eprintln!("warn: {} is deprecated, move it to {}",
+                          legacy.display(), path.display());
+                return Some(legacy);
+            }
+        }
+
+        None
+    }
+
+    fn get_configuration_file() -> Result<File, Box<dyn std::error::Error>>
+    {
+        let config_file = Self::find_configuration_file()
             .ok_or(std::io::Error::new(std::io::ErrorKind::NotFound, "Config file not found"))?;
         Ok(File::open(config_file)?)
     }
@@ -463,6 +503,8 @@ impl Configuration {
 #[cfg(test)]
 mod tests {
     use super::Configuration;
+    use std::fs;
+    use std::path::PathBuf;
 
     fn parse(text: &str) -> Result<Configuration, super::ConfigurationError>
     {
@@ -500,5 +542,35 @@ mod tests {
     fn non_mapping_is_an_error()
     {
         assert!(parse("- a list").is_err());
+    }
+
+    #[test]
+    fn configuration_file_lookup_order()
+    {
+        let root = std::env::temp_dir().join(format!("ufkbd-config-test-{}", std::process::id()));
+        let (home, etc) = (root.join("home"), root.join("etc"));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(home.join("ufkbd")).unwrap();
+        fs::create_dir_all(etc.join("ufkbd")).unwrap();
+
+        let find = || Configuration::find_configuration_file_in(vec![home.clone(), etc.clone()]);
+        let touch = |p: PathBuf| { fs::write(&p, "").unwrap(); p };
+
+        assert_eq!(find(), None);
+
+        let etc_legacy = touch(etc.join("unfettered-keyboard.yaml"));
+        assert_eq!(find(), Some(etc_legacy));
+
+        let etc_new = touch(etc.join("ufkbd/ufkbd.yaml"));
+        assert_eq!(find(), Some(etc_new));
+
+        // A user file with the old name still wins over the system's file.
+        let home_legacy = touch(home.join("unfettered-keyboard.yaml"));
+        assert_eq!(find(), Some(home_legacy));
+
+        let home_new = touch(home.join("ufkbd/ufkbd.yaml"));
+        assert_eq!(find(), Some(home_new));
+
+        let _ = fs::remove_dir_all(&root);
     }
 }
