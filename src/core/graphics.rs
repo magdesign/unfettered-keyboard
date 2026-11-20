@@ -1049,3 +1049,18 @@ impl<D: Display> Drop for Graphics<D> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::LABELS;
+
+    // Lookups use binary search, which silently fails on an unsorted table.
+    #[test]
+    fn labels_sorted()
+    {
+        for pair in LABELS.windows(2) {
+            assert!(pair[0].label < pair[1].label,
+                    "{:?} must come before {:?}", pair[1].label, pair[0].label);
+        }
+    }
+}

@@ -170,6 +170,20 @@ impl Dispatcher {
 
     pub fn dispatch_timers(&mut self)
     {
+        /*
+         * The keyboard can be hidden from another thread (the OSK D-Bus
+         * interface) while a key is held. The compositor does not send the
+         * release for a destroyed surface, so drop such presses here instead
+         * of repeating keys while hidden.
+         */
+        if self.seat.button().is_pressed() {
+            // The lock guard is a temporary and is dropped before cancelling.
+            let visible = self.gfx.lock().unwrap().display().visible();
+            if !visible {
+                self.seat.cancel_all();
+            }
+        }
+
         self.seat.button_mut().dispatch_timers();
     }
 
@@ -184,8 +198,11 @@ impl Dispatcher {
         }
     }
 
-    fn hide(&self)
+    fn hide(&mut self)
     {
+        // No release events will arrive for presses on a hidden keyboard.
+        self.seat.cancel_all();
+
         match &self.osk {
             Some(osk) => osk.set_visible(false),
             None => {
@@ -200,15 +217,21 @@ impl Dispatcher {
 impl Dispatcher {
     fn dispatch_ei_connection(&mut self,
                               _conn: connection::Connection,
-                              evt: connection::Event)
+                              evt: connection::Event) -> Result<(), String>
     {
         match evt {
             connection::Event::Ping { ping } => {
                 ping.done(0);
             },
             connection::Event::Seat { .. } => (),
+            connection::Event::Disconnected { reason, explanation, .. } => {
+                return Err(format!("disconnected by the compositor ({:?}): {}",
+                                   reason, explanation.unwrap_or_default()));
+            },
             _ => eprintln!("warn: unknown ei_connection event emitted"),
         };
+
+        Ok(())
     }
 
     fn dispatch_ei_device(&mut self,
@@ -260,22 +283,36 @@ impl Dispatcher {
         };
     }
 
-    pub fn dispatch_ei(&mut self, ctx: &Context)
+    /*
+     * Handle the pending ei events. An error means the ei connection cannot
+     * be used anymore.
+     */
+    pub fn dispatch_ei(&mut self, ctx: &Context) -> Result<(), String>
     {
         while let Some(evt) = ctx.pending_event() {
             let evt = match evt {
                 PendingRequestResult::Request(e) => e,
-                _ => panic!(),
+                PendingRequestResult::ParseError(e) => {
+                    // The stream is out of sync; nothing after this is usable.
+                    return Err(format!("malformed message: {:?}", e));
+                },
+                PendingRequestResult::InvalidObject(id) => {
+                    // E.g. an event for an object that was just destroyed.
+                    eprintln!("warn: ei event for unknown object {}", id);
+                    continue;
+                },
             };
 
             match evt {
-                Event::Connection(c, e) => self.dispatch_ei_connection(c, e),
+                Event::Connection(c, e) => self.dispatch_ei_connection(c, e)?,
                 Event::Device(d, e) => self.dispatch_ei_device(d, e),
                 Event::Keyboard(k, e) => self.dispatch_ei_keyboard(k, e),
                 Event::Seat(s, e) => self.dispatch_ei_seat(s, e),
                 _ => eprintln!("warn: unknown libei event emitted"),
             };
         }
+
+        Ok(())
     }
 }
 
@@ -427,6 +464,11 @@ impl Dispatch<wl_touch::WlTouch, ()> for Dispatcher {
             wl_touch::Event::Frame => {
                 ctx.seat.commit();
             },
+            wl_touch::Event::Cancel => {
+                ctx.seat.touch_cancel();
+            },
+            wl_touch::Event::Shape { .. } => (),
+            wl_touch::Event::Orientation { .. } => (),
             _ => eprintln!("warn: unknown wl_touch event emitted"),
         };
     }

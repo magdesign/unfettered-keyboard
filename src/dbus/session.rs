@@ -6,6 +6,7 @@
 use futures_util::stream::StreamExt;
 use std::convert::TryFrom;
 use std::env;
+use std::process;
 use std::sync::Arc;
 use tokio::task;
 use zbus::Connection;
@@ -28,6 +29,12 @@ trait ClientPrivate {
 
     #[zbus(signal)]
     fn query_end_session(&self, flags: u32);
+
+    #[zbus(signal)]
+    fn end_session(&self, flags: u32);
+
+    #[zbus(signal)]
+    fn stop(&self);
 }
 
 pub async fn register(conn: &Connection) -> Result<()>
@@ -55,13 +62,30 @@ pub async fn register(conn: &Connection) -> Result<()>
         });
     }
 
+    /*
+     * The session is ending: confirm, then exit as the session manager
+     * expects. Not exiting makes logout wait for the session manager's
+     * timeout.
+     */
     {
         let client_priv = client_priv.clone();
-        let mut stream_es = client_priv.receive_query_end_session().await?;
+        let mut stream_es = client_priv.receive_end_session().await?;
 
         task::spawn(async move {
-            while stream_es.next().await.is_some() {
+            if stream_es.next().await.is_some() {
                 let _ = client_priv.end_session_response(true, "").await;
+                process::exit(0);
+            }
+        });
+    }
+
+    // The session manager asks the client to quit right away.
+    {
+        let mut stream_stop = client_priv.receive_stop().await?;
+
+        task::spawn(async move {
+            if stream_stop.next().await.is_some() {
+                process::exit(0);
             }
         });
     }

@@ -46,38 +46,73 @@ async fn main() -> ExitCode
         },
     };
 
-    let mut dispatcher = Dispatcher::new(&config, queue.handle(), &globals).unwrap();
+    let mut dispatcher = match Dispatcher::new(&config, queue.handle(), &globals) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("{:?}", e);
+            return ExitCode::FAILURE;
+        },
+    };
 
     let wl_evt = Event::readable(0);
 
     let mut events = Events::new();
-    let poller = Poller::new().unwrap();
+    let poller = match Poller::new() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("creating poller: {}", e);
+            return ExitCode::FAILURE;
+        },
+    };
 
-    let rd = RemoteDesktop::new().await.unwrap();
-    let session = rd.create_session(CreateSessionOptions::default()).await.unwrap();
-    let select_devices = SelectDevicesOptions::default()
-                            .set_devices(Some(DeviceType::Keyboard.into()))
-                            .set_persist_mode(PersistMode::DoNot);
-    rd.select_devices(&session, select_devices).await.unwrap();
-    rd.start(&session, None, StartOptions::default()).await.unwrap();
-    let eifd = rd.connect_to_eis(&session, ConnectToEISOptions::default()).await.unwrap();
-    let ei_ctx = Context::new(eifd.into()).unwrap();
+    // This shows a permission dialog, which the user may deny.
+    let ei_ctx = match connect_to_eis().await {
+        Ok(ctx) => ctx,
+        Err(e) => {
+            eprintln!("could not get keyboard access from the remote desktop portal: {}", e);
+            return ExitCode::FAILURE;
+        },
+    };
 
     let ei_evt = Event::readable(1);
 
-    let conn_zbus = zbus::Connection::session().await.unwrap();
-    let haptics = Box::new(FeedbackClient::new(&conn_zbus).await.unwrap());
-    dispatcher.set_haptics(haptics);
+    // Haptics are optional: feedbackd is not available everywhere.
+    match zbus::Connection::session().await {
+        Ok(conn_zbus) => match FeedbackClient::new(&conn_zbus).await {
+            Ok(haptics) => dispatcher.set_haptics(Box::new(haptics)),
+            Err(e) => eprintln!("warn: haptic feedback unavailable: {}", e),
+        },
+        Err(e) => eprintln!("warn: haptic feedback unavailable: {}", e),
+    }
 
-    task::spawn_blocking(move || {
-        handshake::ei_handshake_blocking(&ei_ctx, "ufkbd-kde",
-                                         ContextType::Sender).unwrap();
+    let res = task::spawn_blocking(move || {
+        if let Err(e) = handshake::ei_handshake_blocking(&ei_ctx, "ufkbd-kde",
+                                                         ContextType::Sender) {
+            eprintln!("ei handshake failed: {:?}", e);
+            return ExitCode::FAILURE;
+        }
 
         loop {
-            conn.flush().unwrap();
-            ei_ctx.flush().unwrap();
+            if let Err(e) = conn.flush() {
+                eprintln!("lost connection to the compositor: {}", e);
+                return ExitCode::FAILURE;
+            }
+            if let Err(e) = ei_ctx.flush() {
+                eprintln!("lost ei connection: {}", e);
+                return ExitCode::FAILURE;
+            }
 
-            let guard = queue.prepare_read().unwrap();
+            let guard = match queue.prepare_read() {
+                Some(g) => g,
+                None => {
+                    // Events are already queued; dispatch them first.
+                    if let Err(e) = queue.dispatch_pending(&mut dispatcher) {
+                        eprintln!("dispatching Wayland events: {}", e);
+                        return ExitCode::FAILURE;
+                    }
+                    continue;
+                },
+            };
             let wlfd = guard.connection_fd();
             let timer = dispatcher.button().next_time().map(|t| t - Instant::now());
 
@@ -89,16 +124,43 @@ async fn main() -> ExitCode
             }
 
             if !events.is_empty() {
+                // This may still emit EWOULDBLOCK errors.
                 let _ = guard.read();
-                let _ = ei_ctx.read();
 
-                queue.dispatch_pending(&mut dispatcher).unwrap();
-                dispatcher.dispatch_ei(&ei_ctx);
+                // The ei socket reports a closed connection as an error.
+                if let Err(e) = ei_ctx.read() {
+                    eprintln!("lost ei connection: {}", e);
+                    return ExitCode::FAILURE;
+                }
+
+                if let Err(e) = queue.dispatch_pending(&mut dispatcher) {
+                    eprintln!("dispatching Wayland events: {}", e);
+                    return ExitCode::FAILURE;
+                }
+
+                if let Err(e) = dispatcher.dispatch_ei(&ei_ctx) {
+                    eprintln!("ei: {}", e);
+                    return ExitCode::FAILURE;
+                }
             }
 
             dispatcher.dispatch_timers();
         }
-    }).await.unwrap();
+    }).await;
 
-    ExitCode::SUCCESS
+    res.unwrap_or(ExitCode::FAILURE)
+}
+
+async fn connect_to_eis() -> Result<Context, Box<dyn std::error::Error>>
+{
+    let rd = RemoteDesktop::new().await?;
+    let session = rd.create_session(CreateSessionOptions::default()).await?;
+    let select_devices = SelectDevicesOptions::default()
+                            .set_devices(Some(DeviceType::Keyboard.into()))
+                            .set_persist_mode(PersistMode::DoNot);
+    rd.select_devices(&session, select_devices).await?;
+    // Fails if the user denies the request.
+    rd.start(&session, None, StartOptions::default()).await?.response()?;
+    let eifd = rd.connect_to_eis(&session, ConnectToEISOptions::default()).await?;
+    Ok(Context::new(eifd.into())?)
 }

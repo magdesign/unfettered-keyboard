@@ -10,7 +10,9 @@ use crate::core::Graphics;
 use crate::core::Keyboard;
 use crate::core::Layout;
 use crate::core::ModState;
+use crate::core::PRESSES_MAX;
 use crate::wayland::Dispatcher;
+use std::convert::TryFrom;
 use std::sync::Arc;
 use std::sync::Mutex;
 use wayland_client::protocol::wl_pointer;
@@ -150,25 +152,66 @@ impl<D: Display, K: Keyboard> Seat<D, K> {
         }
     }
 
+    /*
+     * Press ID for a touch point. ID 0 is the pointer. Touch points that
+     * cannot be tracked (negative or too large IDs) are ignored.
+     */
+    fn touch_id(id: i32) -> Option<usize>
+    {
+        let id = usize::try_from(id).ok()?.checked_add(1)?;
+        if id < PRESSES_MAX {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
     pub fn touch_press(&mut self, id: i32, x: f64, y: f64)
     {
-        let id = id as usize + 1;
-        let act = TouchAction { id, act: PressAction::Press(x, y), };
-        self.actions.push(act);
+        if let Some(id) = Self::touch_id(id) {
+            let act = TouchAction { id, act: PressAction::Press(x, y), };
+            self.actions.push(act);
+        }
     }
 
     pub fn touch_pos(&mut self, id: i32, x: f64, y: f64)
     {
-        let id = id as usize + 1;
-        let act = TouchAction { id, act: PressAction::Pos(x, y), };
-        self.actions.push(act);
+        if let Some(id) = Self::touch_id(id) {
+            let act = TouchAction { id, act: PressAction::Pos(x, y), };
+            self.actions.push(act);
+        }
     }
 
     pub fn touch_release(&mut self, id: i32)
     {
-        let id = id as usize + 1;
-        let act = TouchAction { id, act: PressAction::Release, };
-        self.actions.push(act);
+        if let Some(id) = Self::touch_id(id) {
+            let act = TouchAction { id, act: PressAction::Release, };
+            self.actions.push(act);
+        }
+    }
+
+    /*
+     * The compositor took over all touch points (e.g. for a gesture). No up
+     * events will follow for them, so forget them without emitting keys.
+     */
+    pub fn touch_cancel(&mut self)
+    {
+        // Pending pointer actions (ID 0) are unaffected.
+        self.actions.retain(|act| act.id == 0);
+
+        for id in 1..PRESSES_MAX {
+            self.button.cancel(id);
+        }
+    }
+
+    /*
+     * Forget every press, e.g. when the keyboard is hidden while a finger is
+     * down and the compositor will not send the release anymore.
+     */
+    pub fn cancel_all(&mut self)
+    {
+        self.actions.clear();
+        self.button.cancel_all();
     }
 
     pub fn commit(&mut self)

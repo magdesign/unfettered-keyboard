@@ -355,9 +355,8 @@ impl Part {
             KeyValue(Keysym::Meta_L, _) => false,
             KeyValue(Keysym::XF86_Fn, _) => false,
 
-            KeyValue(Keysym::Scroll_Lock, _) => false,
-            KeyValue(Keysym::Num_Lock, _) => false,
-            KeyValue(Keysym::Caps_Lock, _) => false,
+            // Layout switchers only change the layout, their labels are not text.
+            KeyValue(sym, _) if Layout::is_layout_switcher(*sym) => false,
 
             KeyValue(_, l) => l != "",
         }
@@ -399,7 +398,8 @@ impl Part {
     #[inline(always)]
     pub fn release(&mut self)
     {
-        self.presses -= 1;
+        // Never wrap around: a stuck counter would draw the key as pressed forever.
+        self.presses = self.presses.saturating_sub(1);
     }
 
     #[inline(always)]
@@ -434,9 +434,7 @@ impl Part {
     pub fn pressable(&self) -> bool
     {
         match self.val.0 {
-            Keysym::Scroll_Lock => true,
-            Keysym::Num_Lock => true,
-            Keysym::Caps_Lock => true,
+            sym if Layout::is_layout_switcher(sym) => true,
 
             Keysym::Meta_L => true,
 
@@ -738,6 +736,19 @@ impl Layout {
         Self::is_keysym_modifier(modifier) || modifier == MOD_SHIFT
     }
 
+    /*
+     * Keysyms used by the layout switching keys (see KEYSYMS). These keys
+     * switch the layout on release and must never emit a key or text.
+     */
+    pub fn is_layout_switcher(sym: Keysym) -> bool
+    {
+        matches!(sym,
+                 Keysym::Scroll_Lock
+                 | Keysym::Num_Lock
+                 | Keysym::Caps_Lock
+                 | Keysym::Menu)
+    }
+
     pub fn modifier_keysym(modifier: usize) -> Keysym
     {
         match modifier {
@@ -781,28 +792,31 @@ impl Layout {
 
     pub fn load(cfg: &Configuration) -> Result<Self, LayoutError>
     {
-        let extra_keys = cfg.extra_keys();
         let base_dirs = BaseDirectories::with_prefix("unfettered-keyboard/layouts");
+        Self::load_with(cfg, |name| base_dirs.find_data_file(name))
+    }
 
-        let path = base_dirs.find_data_file(cfg.layout())
-            .ok_or(LayoutError::NotFound(cfg.layout().to_string()))?;
-        let main_layout = LayoutLoader::load(path, extra_keys)?;
+    // Load the layouts from a single directory, e.g. the source tree.
+    #[cfg(test)]
+    pub fn load_from_dir(cfg: &Configuration, dir: &Path) -> Result<Self, LayoutError>
+    {
+        Self::load_with(cfg, |name| Some(dir.join(name)).filter(|p| p.exists()))
+    }
 
-        let path = base_dirs.find_data_file("numeric.xml")
-            .ok_or(LayoutError::NotFound(String::from("numeric.xml")))?;
-        let numeric = LayoutLoader::load(path, extra_keys)?;
+    fn load_with<F>(cfg: &Configuration, find: F) -> Result<Self, LayoutError>
+        where F: Fn(&str) -> Option<std::path::PathBuf>
+    {
+        let extra_keys = cfg.extra_keys();
+        let load = |name: &str| {
+            let path = find(name).ok_or(LayoutError::NotFound(name.to_string()))?;
+            LayoutLoader::load(path, extra_keys)
+        };
 
-        let path = base_dirs.find_data_file("greekmath.xml")
-            .ok_or(LayoutError::NotFound(String::from("greekmath.xml")))?;
-        let greekmath = LayoutLoader::load(path, extra_keys)?;
-
-        let path = base_dirs.find_data_file("emoji.xml")
-            .ok_or(LayoutError::NotFound(String::from("emoji.xml")))?;
-        let emoji = LayoutLoader::load(path, extra_keys)?;
-
-        let path = base_dirs.find_data_file("bottom_row.xml")
-            .ok_or(LayoutError::NotFound(String::from("bottom_row.xml")))?;
-        let bottom_row = LayoutLoader::load(path, extra_keys)?;
+        let main_layout = load(cfg.layout())?;
+        let numeric = load("numeric.xml")?;
+        let greekmath = load("greekmath.xml")?;
+        let emoji = load("emoji.xml")?;
+        let bottom_row = load("bottom_row.xml")?;
 
         let mut layout = Layout {
             main_layout,
@@ -842,13 +856,18 @@ impl Layout {
         &self.rows
     }
 
-    pub fn locate_key(&self, x: f64, y: f64) -> Option<&Key>
+    /*
+     * Find the (row, column) of the key at the given layout coordinates.
+     * Non-finite coordinates (e.g. from a zero-sized surface) match nothing.
+     */
+    pub fn locate_key_index(&self, x: f64, y: f64) -> Option<(usize, usize)>
     {
-        if y < 0. || y as usize >= self.rows.len() {
+        if !x.is_finite() || !y.is_finite() || y < 0. || y as usize >= self.rows.len() {
             return None;
         }
 
-        let row = &self.rows[y as usize];
+        let row_idx = y as usize;
+        let row = &self.rows[row_idx];
         let res = row.binary_search_by(|k| {
             if k.x2 < x {
                 Ordering::Less
@@ -859,33 +878,19 @@ impl Layout {
             }
         });
 
-        match res {
-            Ok(i) => Some(&row[i]),
-            Err(_) => None,
-        }
+        res.ok().map(|col| (row_idx, col))
     }
 
-    pub fn locate_key_mut(&mut self, x: f64, y: f64) -> Option<&mut Key>
+    #[inline(always)]
+    pub fn key(&self, row: usize, col: usize) -> Option<&Key>
     {
-        if y < 0. || y as usize >= self.rows.len() {
-            return None;
-        }
+        self.rows.get(row)?.get(col)
+    }
 
-        let row = &mut self.rows[y as usize];
-        let res = row.binary_search_by(|k| {
-            if k.x2 < x {
-                Ordering::Less
-            } else if k.x1 > x {
-                Ordering::Greater
-            } else {
-                Ordering::Equal
-            }
-        });
-
-        match res {
-            Ok(i) => Some(&mut row[i]),
-            Err(_) => None,
-        }
+    #[inline(always)]
+    pub fn key_mut(&mut self, row: usize, col: usize) -> Option<&mut Key>
+    {
+        self.rows.get_mut(row)?.get_mut(col)
     }
 
     pub fn update_modifiers<K: Keyboard>(&mut self, kbd: &K, mod_state: &[ModState])
@@ -960,5 +965,19 @@ impl Layout {
         let data = self.main_layout.clone();
         self.open_layout(data);
         self.set_text_supported(self.text_supp);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KEYSYMS;
+
+    // Lookups use binary search, which silently fails on an unsorted table.
+    #[test]
+    fn keysyms_sorted_by_name()
+    {
+        for pair in KEYSYMS.windows(2) {
+            assert!(pair[0].0 < pair[1].0, "{:?} must come before {:?}", pair[1].0, pair[0].0);
+        }
     }
 }

@@ -125,10 +125,14 @@ impl Configuration {
     {
         let height = yaml.get(&Yaml::String(String::from("height")));
         if let Some(height) = height {
-            let height = height.as_f64().ok_or(ConfigurationError::TypeError {
-                field: "evfb.height",
-                expected: "fraction",
-            })?;
+            // The keyboard takes this fraction of the screen, so 0 < height <= 1.
+            let height = height.as_f64()
+                .or_else(|| height.as_i64().map(|h| h as f64))
+                .filter(|&h| h > 0.0 && h <= 1.0)
+                .ok_or(ConfigurationError::TypeError {
+                    field: "evfb.height",
+                    expected: "fraction greater than 0 and at most 1",
+                })?;
             self.evfb_height = height;
         }
 
@@ -233,9 +237,9 @@ impl Configuration {
         Ok(File::open(config_file)?)
     }
 
-    pub fn load() -> Result<Self, ConfigurationError>
+    fn defaults() -> Self
     {
-        let mut cfg = Configuration {
+        Configuration {
             longpress: 600,
             repeat: 25,
             haptics: true,
@@ -252,117 +256,147 @@ impl Configuration {
 
             colors: KeyboardColors::default(),
             keycap_padding: 0.02,
-        };
+        }
+    }
+
+    pub fn load() -> Result<Self, ConfigurationError>
+    {
+        let mut cfg = Self::defaults();
 
         if let Ok(file) = Self::get_configuration_file() {
-            let yaml = YamlDecoder::read(file).decode()?;
-            let yaml = yaml[0].as_hash().ok_or(ConfigurationError::TypeError {
-                field: "(top level)",
-                expected: "YAML mapping",
-            })?;
-
-            let longpress = yaml.get(&Yaml::String(String::from("longpress_ms")));
-            if let Some(longpress) = longpress {
-                let longpress = match longpress.as_i64() {
-                    Some(l) => l.try_into().ok(),
-                    None => None,
-                };
-                let longpress = longpress.ok_or(ConfigurationError::TypeError {
-                    field: "longpress_ms",
-                    expected: "unsigned integer",
-                })?;
-                cfg.longpress = longpress;
-            }
-
-            let repeat = yaml.get(&Yaml::String(String::from("repeat_ms")));
-            if let Some(repeat) = repeat {
-                let repeat = match repeat.as_i64() {
-                    Some(l) => l.try_into().ok(),
-                    None => None,
-                };
-                let repeat = repeat.ok_or(ConfigurationError::TypeError {
-                    field: "repeat_ms",
-                    expected: "unsigned integer",
-                })?;
-                cfg.repeat = repeat;
-            }
-
-            let haptics = yaml.get(&Yaml::String(String::from("haptics")));
-            if let Some(haptics) = haptics {
-                let haptics = haptics.as_bool().ok_or(ConfigurationError::TypeError {
-                    field: "haptics",
-                    expected: "boolean",
-                })?;
-                cfg.haptics = haptics;
-            }
-
-            let layout = yaml.get(&Yaml::String(String::from("layout")));
-            if let Some(layout) = layout {
-                let layout = layout.as_str().ok_or(ConfigurationError::TypeError {
-                    field: "layout",
-                    expected: "string",
-                })?;
-                cfg.layout = layout.to_string();
-            }
-
-            let keys = yaml.get(&Yaml::String(String::from("extra_keys")));
-            if let Some(keys) = keys {
-                let keys = keys.as_vec().ok_or(ConfigurationError::TypeError {
-                    field: "extra_keys",
-                    expected: "list",
-                })?;
-                cfg.extra_keys = Vec::with_capacity(keys.len());
-
-                for k in keys {
-                    let k = k.as_str().ok_or(ConfigurationError::TypeError {
-                        field: "extra_keys",
-                        expected: "list of strings",
-                    })?;
-                    cfg.extra_keys.push(String::from(k));
-                }
-
-                cfg.extra_keys.sort_unstable();
-            }
-
-            let wl = yaml.get(&Yaml::String(String::from("wayland")));
-            if let Some(wl) = wl {
-                let wl = wl.as_hash().ok_or(ConfigurationError::TypeError {
-                    field: "wayland",
-                    expected: "YAML mapping",
-                })?;
-                cfg.load_wayland(wl)?;
-            }
-
-            let evfb = yaml.get(&Yaml::String(String::from("evfb")));
-            if let Some(evfb) = evfb {
-                let evfb = evfb.as_hash().ok_or(ConfigurationError::TypeError {
-                    field: "evfb",
-                    expected: "YAML mapping",
-                })?;
-                cfg.load_evfb(evfb)?;
-            }
-
-            let colors = yaml.get(&Yaml::String(String::from("colors")));
-            if let Some(colors) = colors {
-                let colors = colors.as_hash().ok_or(ConfigurationError::TypeError {
-                    field: "colors",
-                    expected: "YAML mapping",
-                })?;
-                cfg.load_colors(colors)?;
-            }
-
-            let keycap_padding = yaml.get(&Yaml::String(String::from("keycap_padding")));
-            if let Some(keycap_padding) = keycap_padding {
-                let keycap_padding = keycap_padding.as_f64().ok_or(ConfigurationError::TypeError {
-                    field: "keycap_padding",
-                    expected: "fraction",
-                })?;
-                cfg.keycap_padding = keycap_padding;
-            }
-
+            let docs = YamlDecoder::read(file).decode()?;
+            cfg.apply_documents(&docs)?;
         }
 
         Ok(cfg)
+    }
+
+    // Configuration from YAML text, for tests.
+    #[cfg(test)]
+    pub fn from_yaml_str(text: &str) -> Result<Self, ConfigurationError>
+    {
+        let docs = YamlDecoder::read(text.as_bytes()).decode()?;
+        let mut cfg = Self::defaults();
+        cfg.apply_documents(&docs)?;
+        Ok(cfg)
+    }
+
+    /*
+     * Apply the settings of a decoded configuration file. A file that is
+     * empty, has only comments, or is only a document header has no
+     * settings and keeps the defaults.
+     */
+    fn apply_documents(&mut self, docs: &[Yaml]) -> Result<(), ConfigurationError>
+    {
+        let yaml = match docs.first() {
+            None | Some(Yaml::Null) => return Ok(()),
+            Some(doc) => doc.as_hash().ok_or(ConfigurationError::TypeError {
+                field: "(top level)",
+                expected: "YAML mapping",
+            })?,
+        };
+
+        let longpress = yaml.get(&Yaml::String(String::from("longpress_ms")));
+        if let Some(longpress) = longpress {
+            let longpress = match longpress.as_i64() {
+                Some(l) => l.try_into().ok(),
+                None => None,
+            };
+            let longpress = longpress.ok_or(ConfigurationError::TypeError {
+                field: "longpress_ms",
+                expected: "unsigned integer",
+            })?;
+            self.longpress = longpress;
+        }
+
+        let repeat = yaml.get(&Yaml::String(String::from("repeat_ms")));
+        if let Some(repeat) = repeat {
+            let repeat = match repeat.as_i64() {
+                Some(l) => l.try_into().ok(),
+                None => None,
+            };
+            // A zero interval would repeat a held key endlessly without pausing.
+            let repeat = repeat.filter(|&r: &u64| r >= 1).ok_or(ConfigurationError::TypeError {
+                field: "repeat_ms",
+                expected: "integer of at least 1",
+            })?;
+            self.repeat = repeat;
+        }
+
+        let haptics = yaml.get(&Yaml::String(String::from("haptics")));
+        if let Some(haptics) = haptics {
+            let haptics = haptics.as_bool().ok_or(ConfigurationError::TypeError {
+                field: "haptics",
+                expected: "boolean",
+            })?;
+            self.haptics = haptics;
+        }
+
+        let layout = yaml.get(&Yaml::String(String::from("layout")));
+        if let Some(layout) = layout {
+            let layout = layout.as_str().ok_or(ConfigurationError::TypeError {
+                field: "layout",
+                expected: "string",
+            })?;
+            self.layout = layout.to_string();
+        }
+
+        let keys = yaml.get(&Yaml::String(String::from("extra_keys")));
+        if let Some(keys) = keys {
+            let keys = keys.as_vec().ok_or(ConfigurationError::TypeError {
+                field: "extra_keys",
+                expected: "list",
+            })?;
+            self.extra_keys = Vec::with_capacity(keys.len());
+
+            for k in keys {
+                let k = k.as_str().ok_or(ConfigurationError::TypeError {
+                    field: "extra_keys",
+                    expected: "list of strings",
+                })?;
+                self.extra_keys.push(String::from(k));
+            }
+
+            self.extra_keys.sort_unstable();
+        }
+
+        let wl = yaml.get(&Yaml::String(String::from("wayland")));
+        if let Some(wl) = wl {
+            let wl = wl.as_hash().ok_or(ConfigurationError::TypeError {
+                field: "wayland",
+                expected: "YAML mapping",
+            })?;
+            self.load_wayland(wl)?;
+        }
+
+        let evfb = yaml.get(&Yaml::String(String::from("evfb")));
+        if let Some(evfb) = evfb {
+            let evfb = evfb.as_hash().ok_or(ConfigurationError::TypeError {
+                field: "evfb",
+                expected: "YAML mapping",
+            })?;
+            self.load_evfb(evfb)?;
+        }
+
+        let colors = yaml.get(&Yaml::String(String::from("colors")));
+        if let Some(colors) = colors {
+            let colors = colors.as_hash().ok_or(ConfigurationError::TypeError {
+                field: "colors",
+                expected: "YAML mapping",
+            })?;
+            self.load_colors(colors)?;
+        }
+
+        let keycap_padding = yaml.get(&Yaml::String(String::from("keycap_padding")));
+        if let Some(keycap_padding) = keycap_padding {
+            let keycap_padding = keycap_padding.as_f64().ok_or(ConfigurationError::TypeError {
+                field: "keycap_padding",
+                expected: "fraction",
+            })?;
+            self.keycap_padding = keycap_padding;
+        }
+
+        Ok(())
     }
 
     #[inline(always)]
@@ -423,5 +457,48 @@ impl Configuration {
     pub fn keycap_padding(&self) -> f64
     {
         self.keycap_padding
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Configuration;
+
+    fn parse(text: &str) -> Result<Configuration, super::ConfigurationError>
+    {
+        Configuration::from_yaml_str(text)
+    }
+
+    #[test]
+    fn empty_files_use_defaults()
+    {
+        for text in ["", "\n", "# only a comment\n", "%YAML 1.2\n---\n", "---\n"] {
+            let cfg = parse(text).unwrap_or_else(|e| panic!("{:?}: {}", text, e));
+            assert_eq!(cfg.repeat_ms(), 25, "{:?}", text);
+        }
+    }
+
+    #[test]
+    fn repeat_ms_must_be_positive()
+    {
+        assert!(parse("repeat_ms: 0").is_err());
+        assert!(parse("repeat_ms: -5").is_err());
+        assert_eq!(parse("repeat_ms: 1").unwrap().repeat_ms(), 1);
+    }
+
+    #[test]
+    fn evfb_height_must_be_a_fraction()
+    {
+        assert!(parse("evfb: { height: 0 }").is_err());
+        assert!(parse("evfb: { height: 1.5 }").is_err());
+        assert!(parse("evfb: { height: -0.2 }").is_err());
+        assert_eq!(parse("evfb: { height: 1 }").unwrap().evfb_height(), 1.0);
+        assert_eq!(parse("evfb: { height: 0.3 }").unwrap().evfb_height(), 0.3);
+    }
+
+    #[test]
+    fn non_mapping_is_an_error()
+    {
+        assert!(parse("- a list").is_err());
     }
 }

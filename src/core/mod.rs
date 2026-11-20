@@ -15,6 +15,7 @@ pub use self::button::FeedbackType;
 pub use self::button::Haptics;
 pub use self::button::Keyboard;
 pub use self::button::ModState;
+pub use self::button::PRESSES_MAX;
 pub use self::config::Configuration;
 pub use self::config::KeyboardColors;
 pub use self::graphics::Display;

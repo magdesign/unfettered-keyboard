@@ -97,13 +97,17 @@ impl DrawOperation {
 }
 
 struct Press {
+    // Starting position, in layout units, used to compute the drag angle.
     x1: f64,
     y1: f64,
+    // The key being pressed, as an index into the current layout's rows.
+    row: usize,
+    col: usize,
     part: usize,
     timer: Instant,
 }
 
-const PRESSES_MAX: usize = 64;
+pub const PRESSES_MAX: usize = 64;
 
 pub enum FeedbackType {
     GestureStart,
@@ -131,6 +135,7 @@ pub struct Button<D: Display, K: Keyboard> {
     haptics: Option<Box<dyn Haptics>>,
 
     presses: [Option<Press>; PRESSES_MAX],
+    // IDs of presses with a pending timer, sorted by the time they expire.
     timers: VecDeque<usize>,
     modifiers: [ModState; MODIFIERS_MAX],
 
@@ -254,12 +259,34 @@ impl<D: Display, K: Keyboard> Button<D, K> {
     pub fn next_time(&self) -> Option<Instant>
     {
         let id = *self.timers.front()?;
-        if id == PRESSES_MAX {
-            return None;
-        }
 
-        // The next timer must always be held by an active key press.
-        Some(self.presses[id].as_ref().unwrap().timer)
+        match &self.presses[id] {
+            Some(press) => Some(press.timer),
+            // Stale entry: wake up now so dispatch_timers() can discard it.
+            None => Some(Instant::now()),
+        }
+    }
+
+    fn timer_of(&self, id: usize) -> Option<Instant>
+    {
+        self.presses.get(id)?.as_ref().map(|p| p.timer)
+    }
+
+    /*
+     * Queue the timer of an active press, keeping the queue sorted so that the
+     * front always holds the earliest timer. The press must not be queued yet.
+     */
+    fn schedule(&mut self, id: usize)
+    {
+        let timer = match self.timer_of(id) {
+            Some(t) => t,
+            None => return,
+        };
+
+        let pos = self.timers.iter()
+                      .position(|&other| self.timer_of(other).map_or(false, |t| t > timer))
+                      .unwrap_or(self.timers.len());
+        self.timers.insert(pos, id);
     }
 
     fn update_modifier(&mut self, modifier: usize, old: ModState, new: ModState) -> bool
@@ -349,15 +376,22 @@ impl<D: Display, K: Keyboard> Button<D, K> {
 
     pub fn press(&mut self, id: usize, x: f64, y: f64)
     {
-        if self.presses[id].is_some() {
-            return;
+        // Ignore IDs that cannot be tracked and presses that are already active.
+        match self.presses.get(id) {
+            Some(None) => (),
+            _ => return,
         }
 
         let (x, y) = (x * self.x_scale, y * self.y_scale);
 
-        let key = match self.layout.locate_key_mut(x, y) {
-            Some(k) => k,
+        let (row, col) = match self.layout.locate_key_index(x, y) {
+            Some(idx) => idx,
             // Ignore the press if it is not for a key.
+            None => return,
+        };
+
+        let key = match self.layout.key_mut(row, col) {
+            Some(k) => k,
             None => return,
         };
 
@@ -374,12 +408,14 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         self.presses[id] = Some(Press {
             x1: x,
             y1: y,
+            row,
+            col,
             part: 0,
             timer,
         });
-        self.timers.push_back(id);
+        self.schedule(id);
 
-        let key = self.layout.locate_key(x, y);
+        let key = self.layout.key(row, col);
         Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
     }
 
@@ -398,16 +434,7 @@ impl<D: Display, K: Keyboard> Button<D, K> {
 
     fn remove_timer(&mut self, id: usize)
     {
-        for evt in self.timers.iter_mut() {
-            if *evt == id {
-                *evt = PRESSES_MAX;
-                break;
-            }
-        }
-
-        while self.timers.front() == Some(&PRESSES_MAX) {
-            self.timers.pop_front();
-        }
+        self.timers.retain(|&t| t != id);
     }
 
     fn try_cancel_mod(&mut self, modifier: usize) -> DrawOperation
@@ -456,15 +483,16 @@ impl<D: Display, K: Keyboard> Button<D, K> {
 
     pub fn pos(&mut self, id: usize, x: f64, y: f64)
     {
-        let press = match &mut self.presses[id] {
-            Some(p) => p,
-            None => return,
+        let press = match self.presses.get_mut(id) {
+            Some(Some(p)) => p,
+            _ => return,
         };
 
         let (x, y) = (x * self.x_scale, y * self.y_scale);
 
         let (dx, dy) = (x - press.x1, y - press.y1);
-        if dx * dx + dy * dy < self.r_square {
+        // The negated comparison also bails out on NaN.
+        if !(dx * dx + dy * dy >= self.r_square) {
             // We only need to make changes when the key is being dragged.
             return;
         }
@@ -472,7 +500,10 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         let angle = dy.atan2(dx) * 8.0 / std::f64::consts::PI + 8.0;
         let angle = angle.clamp(0.0, 15.0) as usize;
 
-        let key = self.layout.locate_key_mut(press.x1, press.y1).unwrap();
+        let key = match self.layout.key_mut(press.row, press.col) {
+            Some(k) => k,
+            None => return,
+        };
 
         let old_part = press.part;
         Self::update_pressed_part(press, key, angle);
@@ -493,14 +524,14 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         let modifier2 = key.parts[new_part].modifier_id();
 
         press.timer = Instant::now() + self.longpress;
+        let (row, col) = (press.row, press.col);
         self.remove_timer(id);
-        self.timers.push_back(id);
+        self.schedule(id);
 
         let mut draw = self.try_cancel_mod(modifier1);
         draw.combine(self.try_press_mod(modifier2));
 
-        let press = self.presses[id].as_ref().unwrap();
-        let key = self.layout.locate_key(press.x1, press.y1);
+        let key = self.layout.key(row, col);
         Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
     }
 
@@ -511,9 +542,8 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         let meta_pressed = modifiers[MOD_META - 1] != ModState::Released;
         let mods_pressed = ctrl_pressed || alt_pressed || meta_pressed;
 
-        if part.sym() == Keysym::Scroll_Lock
-        || part.sym() == Keysym::Num_Lock
-        || part.sym() == Keysym::Caps_Lock {
+        // Layout switchers act on release in switch_layout() and emit nothing.
+        if Layout::is_layout_switcher(part.sym()) {
             return;
         }
 
@@ -528,8 +558,25 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         }
     }
 
-    fn release_layout_switcher(&mut self, sym: Keysym) -> DrawOperation
+    /*
+     * Switch to the layout selected by a layout switcher keysym. The caller
+     * must have already removed its own press.
+     */
+    fn switch_layout(&mut self, sym: Keysym) -> DrawOperation
     {
+        if !Layout::is_layout_switcher(sym) {
+            return DrawOperation::Key;
+        }
+
+        /*
+         * Other presses refer to keys of the old layout, which will not exist
+         * anymore. Cancel them, so that they neither emit a different key nor
+         * leave a modifier pressed.
+         */
+        for other in 0..PRESSES_MAX {
+            self.cancel_press(other);
+        }
+
         let old_width = self.layout.width();
         let old_height = self.layout.height();
 
@@ -552,28 +599,78 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         self.layout.update_keys_supported(&self.kbd);
         self.kbd.change_layout(&self.layout);
 
-        self.x_scale *= self.layout.width() / old_width;
-        self.y_scale *= self.layout.height() / old_height;
+        // An empty layout has no size; keep the old scale instead of NaN/inf.
+        let x_ratio = self.layout.width() / old_width;
+        let y_ratio = self.layout.height() / old_height;
+        if x_ratio.is_finite() {
+            self.x_scale *= x_ratio;
+        }
+        if y_ratio.is_finite() {
+            self.y_scale *= y_ratio;
+        }
 
         DrawOperation::Labels
     }
 
     fn is_normal_key_pressed(&self) -> bool
     {
-        for id in &self.timers {
-            if *id == PRESSES_MAX {
-                continue;
-            }
+        self.presses.iter().flatten().any(|press| {
+            self.layout.key(press.row, press.col)
+                .map_or(false, |key| key.parts[press.part].modifier_id() == 0)
+        })
+    }
 
-            let press = self.presses[*id].as_ref().unwrap();
-            let key = self.layout.locate_key(press.x1, press.y1).unwrap();
+    /*
+     * Forget a press without emitting anything. A modifier that was only
+     * pressed (not latched or locked by an earlier press) is released, like
+     * when dragging away from it. Returns what needs to be redrawn and the
+     * key that the press was on.
+     */
+    fn cancel_press(&mut self, id: usize) -> (DrawOperation, Option<(usize, usize)>)
+    {
+        let press = match self.presses.get_mut(id).and_then(Option::take) {
+            Some(p) => p,
+            None => return (DrawOperation::Key, None),
+        };
 
-            if key.parts[press.part].modifier_id() == 0 {
-                return true;
-            }
+        self.remove_timer(id);
+
+        let modifier = match self.layout.key_mut(press.row, press.col) {
+            Some(key) => {
+                let part = &mut key.parts[press.part];
+                part.release();
+                part.modifier_id()
+            },
+            None => 0,
+        };
+
+        (self.try_cancel_mod(modifier), Some((press.row, press.col)))
+    }
+
+    /*
+     * Cancel a press, e.g. when the compositor cancels a touch point. Unlike
+     * release(), this never emits a key.
+     */
+    pub fn cancel(&mut self, id: usize)
+    {
+        let (draw, idx) = self.cancel_press(id);
+        if let Some((row, col)) = idx {
+            let key = self.layout.key(row, col);
+            Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
         }
+    }
 
-        false
+    pub fn cancel_all(&mut self)
+    {
+        for id in 0..PRESSES_MAX {
+            self.cancel(id);
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_pressed(&self) -> bool
+    {
+        self.presses.iter().any(Option::is_some)
     }
 
     /*
@@ -636,30 +733,42 @@ impl<D: Display, K: Keyboard> Button<D, K> {
 
     pub fn release(&mut self, id: usize)
     {
-        let press = match &mut self.presses[id] {
-            Some(p) => p,
-            None => return,
+        let (row, col, part) = match self.presses.get(id) {
+            Some(Some(p)) => (p.row, p.col, p.part),
+            _ => return,
         };
 
-        let key = self.layout.locate_key_mut(press.x1, press.y1).unwrap();
+        let key = match self.layout.key_mut(row, col) {
+            Some(k) => k,
+            None => {
+                // The key is gone; drop the press without emitting anything.
+                self.cancel(id);
+                return;
+            },
+        };
 
-        key.parts[press.part].release();
+        key.parts[part].release();
 
-        let keysym = key.parts[press.part].sym();
-        let modifier = key.parts[press.part].modifier_id();
+        let keysym = key.parts[part].sym();
+        let modifier = key.parts[part].modifier_id();
         if modifier == 0 {
-            Self::emit(&mut self.kbd, &key.parts[press.part], &self.modifiers);
+            Self::emit(&mut self.kbd, &key.parts[part], &self.modifiers);
         }
 
         let mut draw = self.release_mod(modifier);
-        draw.combine(self.release_layout_switcher(keysym));
 
-        let press = self.presses[id].as_ref().unwrap();
-        let key = self.layout.locate_key(press.x1, press.y1);
-        Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
-
+        // The press must be gone before switching, so it is not cancelled.
         self.remove_timer(id);
         self.presses[id] = None;
+
+        let switched = modifier == 0 && Layout::is_layout_switcher(keysym);
+        if switched {
+            draw.combine(self.switch_layout(keysym));
+        }
+
+        // After a switch, the indices refer to a different layout.
+        let key = if switched { None } else { self.layout.key(row, col) };
+        Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
     }
 
     fn lock_mod(&mut self, modifier: usize) -> DrawOperation
@@ -676,37 +785,400 @@ impl<D: Display, K: Keyboard> Button<D, K> {
     {
         let mut draw = DrawOperation::Key;
 
-        while !self.timers.is_empty() {
-            let id = *self.timers.front().unwrap();
-            if id == PRESSES_MAX {
-                self.timers.pop_front();
-                continue;
-            }
+        /*
+         * Compare against a single point in time, and always reschedule
+         * repeats after it, so that this loop handles each timer at most once
+         * per call even if emitting takes longer than the repeat interval.
+         */
+        let now = Instant::now();
+        let repeat = self.repeat.max(Duration::from_millis(1));
 
-            let press = self.presses[id].as_mut().unwrap();
-            if Instant::now() < press.timer {
+        while let Some(&id) = self.timers.front() {
+            let press = match self.presses.get_mut(id) {
+                Some(Some(p)) => p,
+                _ => {
+                    // Stale entry for a press that no longer exists.
+                    self.timers.pop_front();
+                    continue;
+                },
+            };
+
+            if now < press.timer {
                 break;
             }
 
             self.timers.pop_front();
 
-            let key = self.layout.locate_key(press.x1, press.y1).unwrap();
+            let key = match self.layout.key(press.row, press.col) {
+                Some(k) => k,
+                None => continue,
+            };
+            let part = &key.parts[press.part];
 
-            let modifier = key.parts[press.part].modifier_id();
+            let modifier = part.modifier_id();
             if modifier != 0 {
                 draw.combine(self.lock_mod(modifier));
+            } else if Layout::is_layout_switcher(part.sym()) {
+                // Switchers act on release; holding them must not repeat.
             } else {
-                Self::emit(&mut self.kbd, &key.parts[press.part], &self.modifiers);
+                Self::emit(&mut self.kbd, part, &self.modifiers);
 
                 if let Some(h) = &self.haptics {
                     h.vibrate(FeedbackType::KeyRepeat);
                 }
 
-                press.timer += self.repeat;
-                self.timers.push_back(id);
+                // Skip missed repeats instead of emitting them in a burst.
+                press.timer += repeat;
+                if press.timer <= now {
+                    press.timer = now + repeat;
+                }
+                self.schedule(id);
             }
         }
 
         Self::draw(draw, &self.gfx, &self.layout, None, &self.modifiers);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use imgref::ImgRefMut;
+    use rgb::alt::BGRA;
+    use std::path::Path;
+    use std::thread;
+
+    #[derive(Debug, PartialEq)]
+    enum Ev {
+        Press(Keysym),
+        Release(Keysym),
+        Text(String),
+    }
+
+    #[derive(Default)]
+    struct TestKeyboard {
+        events: Vec<Ev>,
+    }
+
+    impl Keyboard for TestKeyboard {
+        fn key_supported(&self, sym: Keysym) -> bool
+        {
+            sym.name().map_or(false, |n| n.starts_with("XK_"))
+        }
+
+        fn press(&mut self, sym: Keysym)
+        {
+            self.events.push(Ev::Press(sym));
+        }
+
+        fn release(&mut self, sym: Keysym)
+        {
+            self.events.push(Ev::Release(sym));
+        }
+
+        fn text(&mut self, text: &str)
+        {
+            self.events.push(Ev::Text(text.to_string()));
+        }
+
+        fn change_layout(&mut self, _layout: &Layout)
+        {
+        }
+    }
+
+    struct TestDisplay {
+        width: u32,
+        height: u32,
+        buf: Vec<BGRA<u8>>,
+    }
+
+    impl Display for TestDisplay {
+        fn size(&self) -> (u32, u32)
+        {
+            (self.width, self.height)
+        }
+
+        fn begin<'a>(&'a mut self) -> ImgRefMut<'a, BGRA<u8>>
+        {
+            ImgRefMut::new(&mut self.buf, self.width as usize, self.height as usize)
+        }
+
+        fn resize(&mut self, width: u32, height: u32)
+        {
+            self.width = width;
+            self.height = height;
+            self.buf.resize(width as usize * height as usize, BGRA { b: 0, g: 0, r: 0, a: 0 });
+        }
+
+        fn end(&mut self, _x: u32, _y: u32, _width: u32, _height: u32)
+        {
+        }
+    }
+
+    type TestButton = Button<TestDisplay, TestKeyboard>;
+
+    // A button using the shipped layouts, taking coordinates in layout units.
+    fn setup(yaml: &str) -> TestButton
+    {
+        let cfg = Configuration::from_yaml_str(yaml).unwrap();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/layouts");
+        let layout = Layout::load_from_dir(&cfg, &dir).unwrap();
+
+        let disp = TestDisplay { width: 1, height: 1, buf: vec![BGRA { b: 0, g: 0, r: 0, a: 0 }] };
+        let gfx = Arc::new(Mutex::new(Graphics::new(disp, &cfg)));
+
+        let mut btn = Button::new(&cfg, layout, TestKeyboard::default(), gfx.clone());
+        btn.set_text_supported(true);
+        gfx.lock().unwrap().resize(btn.layout(), btn.mod_state(), 400, 200);
+        btn.set_scale(1.0, 1.0);
+        btn
+    }
+
+    // Center of the key with a part for the keysym, and that part's index.
+    fn find(btn: &TestButton, sym: Keysym) -> (f64, f64, usize)
+    {
+        for row in btn.layout().rows() {
+            for key in row {
+                if let Some(i) = key.parts.iter().position(|p| p.sym() == sym) {
+                    return ((key.x1 + key.x2) / 2.0, (key.y1 + key.y2) / 2.0, i);
+                }
+            }
+        }
+
+        panic!("{:?} is not in the layout", sym);
+    }
+
+    // Direction to drag for each part, see the constants above.
+    fn drag_offset(part: usize) -> (f64, f64)
+    {
+        match part {
+            0 => (0.0, 0.0),
+            PART_TL => (-0.6, -0.6),
+            PART_TR => (0.6, -0.6),
+            PART_BL => (-0.6, 0.6),
+            PART_BR => (0.6, 0.6),
+            PART_LEFT => (-0.6, 0.0),
+            PART_RIGHT => (0.6, 0.0),
+            PART_TOP => (0.0, -0.6),
+            PART_BOTTOM => (0.0, 0.6),
+            _ => unreachable!(),
+        }
+    }
+
+    // Press and drag to the part with the keysym, without releasing.
+    fn hold(btn: &mut TestButton, id: usize, sym: Keysym)
+    {
+        let (x, y, part) = find(btn, sym);
+        btn.press(id, x, y);
+
+        if part != 0 {
+            let (dx, dy) = drag_offset(part);
+            btn.pos(id, x + dx, y + dy);
+        }
+    }
+
+    fn tap(btn: &mut TestButton, id: usize, sym: Keysym)
+    {
+        hold(btn, id, sym);
+        btn.release(id);
+
+        // A layout switch rescales input to the new layout; keep using layout units.
+        btn.set_scale(1.0, 1.0);
+    }
+
+    /*
+     * Events other than modifier presses. Some switchers are swiped from a
+     * modifier key (e.g. 123+ from Ctrl), which presses and releases it.
+     */
+    fn typed(btn: &TestButton) -> Vec<&Ev>
+    {
+        btn.keyboard().events.iter().filter(|ev| match ev {
+            Ev::Press(sym) | Ev::Release(sym) => {
+                !matches!(*sym, Keysym::Shift_L | Keysym::Control_L | Keysym::Alt_L)
+            },
+            Ev::Text(_) => true,
+        }).collect()
+    }
+
+    fn has_sym(btn: &TestButton, sym: Keysym) -> bool
+    {
+        btn.layout().rows().iter().flatten()
+            .any(|k| k.parts.iter().any(|p| p.sym() == sym))
+    }
+
+    #[test]
+    fn typing_a_key_emits_text()
+    {
+        let mut btn = setup("");
+        tap(&mut btn, 1, Keysym::q);
+        assert_eq!(btn.keyboard().events, vec![Ev::Text(String::from("q"))]);
+    }
+
+    // The emoji switcher used to type its own label ("🙂") or a Menu key.
+    #[test]
+    fn layout_switchers_emit_nothing()
+    {
+        let mut btn = setup("");
+        assert!(!has_sym(&btn, Keysym::Caps_Lock));
+
+        tap(&mut btn, 1, Keysym::Menu);
+        assert!(has_sym(&btn, Keysym::Caps_Lock), "emoji layout was not opened");
+
+        tap(&mut btn, 1, Keysym::Caps_Lock);
+        assert!(!has_sym(&btn, Keysym::Caps_Lock), "text layout was not opened");
+
+        tap(&mut btn, 1, Keysym::Num_Lock);
+        assert!(has_sym(&btn, Keysym::Scroll_Lock), "numeric layout was not opened");
+
+        assert_eq!(typed(&btn), Vec::<&Ev>::new());
+    }
+
+    #[test]
+    fn holding_a_layout_switcher_does_not_repeat()
+    {
+        let mut btn = setup("longpress_ms: 0\nrepeat_ms: 1");
+        hold(&mut btn, 1, Keysym::Num_Lock);
+
+        btn.dispatch_timers();
+        thread::sleep(Duration::from_millis(5));
+        btn.dispatch_timers();
+
+        assert_eq!(typed(&btn), Vec::<&Ev>::new());
+        assert_eq!(btn.next_time(), None);
+    }
+
+    // A press on the old layout used to panic or emit another key on release.
+    #[test]
+    fn layout_switch_cancels_other_presses()
+    {
+        let mut btn = setup("longpress_ms: 100000");
+
+        let (qx, qy, _) = find(&btn, Keysym::q);
+        let (sx, sy, _) = find(&btn, Keysym::space);
+        btn.press(1, qx, qy);
+        btn.press(2, sx, sy);
+
+        tap(&mut btn, 3, Keysym::Num_Lock);
+        assert!(has_sym(&btn, Keysym::Scroll_Lock), "numeric layout was not opened");
+
+        btn.pos(1, qx + 0.7, qy);
+        btn.release(1);
+        btn.release(2);
+        btn.dispatch_timers();
+
+        assert_eq!(typed(&btn), Vec::<&Ev>::new());
+        assert!(!btn.is_pressed());
+
+        // The new layout still works.
+        tap(&mut btn, 1, Keysym::_1);
+        assert_eq!(typed(&btn), vec![&Ev::Text(String::from("1"))]);
+    }
+
+    #[test]
+    fn layout_switch_releases_held_modifier()
+    {
+        let mut btn = setup("longpress_ms: 100000");
+
+        hold(&mut btn, 1, Keysym::Shift_L);
+        assert_eq!(btn.mod_state()[0], ModState::Pressed);
+
+        tap(&mut btn, 2, Keysym::Num_Lock);
+
+        assert!(btn.mod_state().iter().all(|&m| m == ModState::Released));
+        assert_eq!(btn.keyboard().events.last(), Some(&Ev::Release(Keysym::Shift_L)));
+        btn.release(1);
+    }
+
+    // Cancelled touches (e.g. taken over by a compositor gesture) must not
+    // emit anything or keep repeating.
+    #[test]
+    fn cancelled_press_emits_nothing()
+    {
+        let mut btn = setup("longpress_ms: 0\nrepeat_ms: 1");
+
+        hold(&mut btn, 1, Keysym::BackSpace);
+        btn.cancel(1);
+        assert_eq!(btn.next_time(), None);
+
+        btn.dispatch_timers();
+        btn.release(1);
+
+        assert_eq!(btn.keyboard().events, vec![]);
+        assert!(!btn.is_pressed());
+    }
+
+    #[test]
+    fn cancelled_modifier_is_released()
+    {
+        let mut btn = setup("");
+
+        hold(&mut btn, 1, Keysym::Shift_L);
+        btn.cancel_all();
+
+        assert!(btn.mod_state().iter().all(|&m| m == ModState::Released));
+        assert_eq!(btn.keyboard().events,
+                   vec![Ev::Press(Keysym::Shift_L), Ev::Release(Keysym::Shift_L)]);
+    }
+
+    // Missed repeats used to be emitted in a burst after a stall.
+    #[test]
+    fn repeat_does_not_burst_after_a_stall()
+    {
+        let mut btn = setup("longpress_ms: 0\nrepeat_ms: 1");
+        let (x, y, _) = find(&btn, Keysym::q);
+
+        btn.press(1, x, y);
+        btn.dispatch_timers();
+        assert_eq!(btn.keyboard().events.len(), 1);
+
+        thread::sleep(Duration::from_millis(30));
+        btn.dispatch_timers();
+        assert_eq!(btn.keyboard().events.len(), 2);
+
+        btn.release(1);
+        assert_eq!(btn.keyboard().events.len(), 3);
+    }
+
+    // With several keys held, a later timer must not delay an earlier one.
+    #[test]
+    fn timers_stay_sorted()
+    {
+        let mut btn = setup("longpress_ms: 50\nrepeat_ms: 1");
+        let (qx, qy, _) = find(&btn, Keysym::q);
+        let (wx, wy, _) = find(&btn, Keysym::w);
+
+        btn.press(1, qx, qy);
+        thread::sleep(Duration::from_millis(60));
+        btn.dispatch_timers();
+
+        // q now repeats every 1 ms, w is pressed with a 50 ms long-press.
+        btn.press(2, wx, wy);
+        let next = btn.next_time().unwrap();
+        assert!(next <= Instant::now() + Duration::from_millis(5),
+                "q's repeat is queued behind w's long-press");
+
+        btn.release(1);
+        btn.release(2);
+    }
+
+    #[test]
+    fn invalid_ids_and_coordinates_are_ignored()
+    {
+        let mut btn = setup("");
+
+        for id in [PRESSES_MAX, PRESSES_MAX + 1, usize::MAX] {
+            btn.press(id, 0.5, 0.5);
+            btn.pos(id, 1.5, 0.5);
+            btn.release(id);
+            btn.cancel(id);
+        }
+
+        btn.press(1, f64::NAN, f64::NAN);
+        btn.press(2, f64::INFINITY, 0.5);
+        btn.press(3, 0.5, -1.0);
+        btn.press(4, 0.5, 1000.0);
+
+        assert!(!btn.is_pressed());
+        assert_eq!(btn.keyboard().events, vec![]);
     }
 }

@@ -50,75 +50,120 @@ impl Keyboard for VirtualKeyboard {
 
     fn press(&mut self, sym: Keysym)
     {
-        let code = *self.keycodes.get(&sym).unwrap();
-        let evt = InputEvent::new_now(EventType::KEY.0, code as u16, 1);
-        self.dev.emit(&[evt]).unwrap();
+        self.emit_key(sym, 1);
     }
 
     fn release(&mut self, sym: Keysym)
     {
-        let code = *self.keycodes.get(&sym).unwrap();
-        let evt = InputEvent::new_now(EventType::KEY.0, code as u16, 0);
-        self.dev.emit(&[evt]).unwrap();
+        self.emit_key(sym, 0);
     }
 
     fn text(&mut self, text: &str)
     {
-        self.tty.write_text(text).unwrap();
+        if let Err(e) = self.tty.write_text(text) {
+            eprintln!("warn: failed to set text {:?}: {}", text, e);
+            return;
+        }
+
         self.press(Keysym::Shift_R);
         self.release(Keysym::Shift_R);
     }
 
     fn change_layout(&mut self, layout: &Layout)
     {
-        let mut keycode = 1;
+        // Key code 0 is KEY_RESERVED and is never emitted.
         let mut used_codes = [false; 256];
+        used_codes[0] = true;
+
+        /*
+         * Modifiers are always mapped, even if the layout has no key for them,
+         * because a latched or locked modifier stays pressed while switching
+         * to a layout without it (e.g. emoji).
+         */
+        let mut wanted = vec![Keysym::Shift_L, Keysym::Control_L, Keysym::Alt_L];
+        for row in layout.rows() {
+            for key in row {
+                for part in &key.parts {
+                    if part.key_available() {
+                        wanted.push(part.sym());
+                    }
+                }
+            }
+        }
 
         self.keycodes.clear();
-        for row in layout.rows() {
-            for key in row {
-                for part in &key.parts {
-                    if !part.key_available() {
-                        continue;
-                    }
 
-                    if let Ok(idx) = STATIC_KEYCODES.binary_search_by_key(&part.sym(), |(s, _)| *s) {
-                        let (sym, KeyCode(code)) = STATIC_KEYCODES[idx];
+        // First pass: keys with a well-known key code.
+        for &sym in &wanted {
+            if self.keycodes.contains_key(&sym) {
+                continue;
+            }
+
+            if let Ok(idx) = STATIC_KEYCODES.binary_search_by_key(&sym, |(s, _)| *s) {
+                let code = STATIC_KEYCODES[idx].1.0;
+                if code == 0 || code > 255 || used_codes[code as usize] {
+                    continue;
+                }
+
+                match self.tty.write_key(sym, code as u8) {
+                    Ok(()) => {
                         self.keycodes.insert(sym, code as u8);
-                        self.tty.write_key(part, code as u8).unwrap();
                         used_codes[code as usize] = true;
-                    }
+                    },
+                    Err(e) => eprintln!("warn: failed to map {:?}: {}", sym, e),
                 }
             }
         }
 
-        for row in layout.rows() {
-            for key in row {
-                for part in &key.parts {
-                    if !part.key_available() {
-                        continue;
-                    }
+        // Second pass: everything else, plus the text key, gets a free code.
+        let mut next_code = 1;
+        let others = wanted.iter().copied().chain(std::iter::once(Keysym::Shift_R));
+        for sym in others {
+            if self.keycodes.contains_key(&sym) {
+                continue;
+            }
 
-                    if self.keycodes.contains_key(&part.sym()) {
-                        continue;
-                    }
+            while next_code < used_codes.len() && used_codes[next_code] {
+                next_code += 1;
+            }
 
-                    while used_codes[keycode as usize] {
-                        keycode += 1;
-                    }
+            if next_code >= used_codes.len() {
+                eprintln!("warn: layout has too many keys for the console, some keys will not work");
+                break;
+            }
 
-                    self.keycodes.insert(part.sym(), keycode);
-                    self.tty.write_key(part, keycode).unwrap();
-                    keycode += 1;
-                }
+            let res = if sym == Keysym::Shift_R {
+                self.tty.write_text_key(next_code as u8)
+            } else {
+                self.tty.write_key(sym, next_code as u8)
+            };
+
+            match res {
+                Ok(()) => {
+                    self.keycodes.insert(sym, next_code as u8);
+                    used_codes[next_code] = true;
+                    next_code += 1;
+                },
+                Err(e) => eprintln!("warn: failed to map {:?}: {}", sym, e),
             }
         }
+    }
+}
 
-        while used_codes[keycode as usize] {
-            keycode += 1;
+impl VirtualKeyboard {
+    fn emit_key(&mut self, sym: Keysym, value: i32)
+    {
+        let code = match self.keycodes.get(&sym) {
+            Some(&c) => c,
+            None => {
+                eprintln!("warn: {:?} is not mapped to a key code", sym);
+                return;
+            },
+        };
+
+        let evt = InputEvent::new_now(EventType::KEY.0, code as u16, value);
+        if let Err(e) = self.dev.emit(&[evt]) {
+            eprintln!("warn: failed to emit {:?}: {}", sym, e);
         }
-
-        self.keycodes.insert(Keysym::Shift_R, keycode);
-        self.tty.write_text_key(keycode).unwrap();
     }
 }

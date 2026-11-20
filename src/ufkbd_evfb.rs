@@ -54,7 +54,13 @@ fn main() -> ExitCode
         gfx.resize(btn.layout(), btn.mod_state(), width, height);
     }
 
-    let mut touchscreen = Touchscreen::new(btn, &cfg).unwrap();
+    let mut touchscreen = match Touchscreen::new(btn, &cfg) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("opening touchscreen: {}", e);
+            return ExitCode::FAILURE;
+        },
+    };
 
     let mut events = Events::new();
     let poller = Poller::new().unwrap();
@@ -77,7 +83,10 @@ fn main() -> ExitCode
         }
 
         if !events.is_empty() {
-            touchscreen.handle_events();
+            if let Err(e) = touchscreen.handle_events() {
+                eprintln!("reading touchscreen: {}", e);
+                return ExitCode::FAILURE;
+            }
         }
 
         touchscreen.dispatch_timers();

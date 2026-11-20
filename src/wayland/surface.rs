@@ -90,6 +90,12 @@ impl Surface {
         self.scale
     }
 
+    #[inline(always)]
+    pub fn visible(&self) -> bool
+    {
+        self.surface.is_some()
+    }
+
     pub fn ack_configure(&mut self, serial: u32)
     {
         self.configured = true;

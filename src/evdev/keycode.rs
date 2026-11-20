@@ -67,8 +67,9 @@ pub const STATIC_KEYCODES: [(Keysym, KeyCode); 78] = [
     (Keysym::Prior, KeyCode::KEY_PAGEUP),
     (Keysym::Next, KeyCode::KEY_PAGEDOWN),
     (Keysym::End, KeyCode::KEY_END),
-    (Keysym::Insert, KeyCode::KEY_INSERT),
+    // Sorted by keysym value: Print is 0xff61 and Insert is 0xff63.
     (Keysym::Print, KeyCode::KEY_SYSRQ),
+    (Keysym::Insert, KeyCode::KEY_INSERT),
     (Keysym::F1, KeyCode::KEY_F1),
     (Keysym::F2, KeyCode::KEY_F2),
     (Keysym::F3, KeyCode::KEY_F3),
@@ -86,3 +87,18 @@ pub const STATIC_KEYCODES: [(Keysym, KeyCode); 78] = [
     (Keysym::Alt_L, KeyCode::KEY_LEFTALT),
     (Keysym::Delete, KeyCode::KEY_DELETE),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::STATIC_KEYCODES;
+
+    // Lookups use binary search, which silently fails on an unsorted table.
+    #[test]
+    fn static_keycodes_sorted_by_keysym()
+    {
+        for pair in STATIC_KEYCODES.windows(2) {
+            assert!(pair[0].0 < pair[1].0,
+                    "{:?} must come before {:?}", pair[1].0, pair[0].0);
+        }
+    }
+}
