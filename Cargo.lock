@@ -998,7 +998,7 @@ dependencies = [
 
 [[package]]
 name = "unfettered-keyboard"
-version = "4.2.2"
+version = "4.2.3"
 dependencies = [
  "ashpd",
  "bindgen",
