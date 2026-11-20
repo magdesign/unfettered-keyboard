@@ -30,7 +30,7 @@ of your keyboard.
 Since Phosh 0.50.0 (see [doc](https://phosh.mobi/posts/phosh-osk-interface/)) install
 [unfettered-keyboard-phosh.service](resources/unfettered-keyboard-phosh.service) and reboot:
 
-    sudo install -Dm755 target/release/ufkbd-gnome /usr/bin/ufkbd-gnome
+    sudo install -Dm755 target/release/ufkbd-gnome /usr/sbin/ufkbd-gnome
     sudo install -Dm644 resources/unfettered-keyboard-phosh.service \
         /usr/lib/systemd/user/mobi.phosh.OSK.service
 
@@ -52,7 +52,7 @@ The `ufkbd-kde` build target is for Plasma Mobile.
 Install [unfettered-keyboard-kde.desktop](resources/unfettered-keyboard-kde.desktop) and
 [unfettered-keyboard.svg](resources/unfettered-keyboard.svg) to register the keyboard with KDE:
 
-    sudo install -Dm755 target/release/ufkbd-kde /usr/bin/ufkbd-kde
+    sudo install -Dm755 target/release/ufkbd-kde /usr/sbin/ufkbd-kde
     sudo install -Dm644 resources/unfettered-keyboard-kde.desktop \
         /usr/share/applications/unfettered-keyboard.desktop
     sudo install -Dm644 resources/unfettered-keyboard.svg \
@@ -74,7 +74,7 @@ The `ufkbd-sxmo` build target is for SXMO.
 Set the `$KEYBOARD` environment variable to your desired keyboard.
 Install [unfettered-keyboard-sxmo.sh](resources/unfettered-keyboard-sxmo.sh) to set it system-wide:
 
-    sudo install -Dm755 target/release/ufkbd-sxmo /usr/bin/ufkbd-sxmo
+    sudo install -Dm755 target/release/ufkbd-sxmo /usr/sbin/ufkbd-sxmo
     sudo install -Dm644 resources/unfettered-keyboard-sxmo.sh \
         /etc/profile.d/unfettered-keyboard.sh
 
@@ -218,6 +218,21 @@ Configuration example (with defaults):
       sublabel: [178, 178, 178]
 
     keycap_padding: 0.0 # Keycap padding in fraction of a key size
+
+    # script: ~/bin/dictate.sh # Run by swiping to 󰍬 on the d key
+
+## Script key
+
+With `script` set, the QWERTY (US) layout shows a microphone (󰍬) in the top
+right corner of the `d` key. Swiping there runs the command with `sh -c` in the
+background, e.g. to start voice typing:
+
+    script: ~/bin/dictate.sh
+
+Without `script`, the corner stays empty. Other layouts can add the key with
+`key2="loc script"` (or any other corner). The icon needs a
+[Nerd Font](https://www.nerdfonts.com); check with
+`fc-list ':charset=f036c'`.
 
 # License
 

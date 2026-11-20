@@ -355,8 +355,8 @@ impl Part {
             KeyValue(Keysym::Meta_L, _) => false,
             KeyValue(Keysym::XF86_Fn, _) => false,
 
-            // Layout switchers only change the layout, their labels are not text.
-            KeyValue(sym, _) if Layout::is_layout_switcher(*sym) => false,
+            // Action keys do something else, their labels are not text.
+            KeyValue(sym, _) if Layout::is_action(*sym) => false,
 
             KeyValue(_, l) => l != "",
         }
@@ -434,7 +434,7 @@ impl Part {
     pub fn pressable(&self) -> bool
     {
         match self.val.0 {
-            sym if Layout::is_layout_switcher(sym) => true,
+            sym if Layout::is_action(sym) => true,
 
             Keysym::Meta_L => true,
 
@@ -525,7 +525,7 @@ impl Key {
     }
 }
 
-const KEYSYMS: [(&str, Keysym, &str); 27] = [
+const KEYSYMS: [(&str, Keysym, &str); 28] = [
     ("\\#", Keysym::numbersign, "#"),
     ("\\?", Keysym::question, "?"),
     ("\\@", Keysym::at, "@"),
@@ -544,6 +544,8 @@ const KEYSYMS: [(&str, Keysym, &str); 27] = [
     ("meta", Keysym::Meta_L, "Meta"),
     ("print", Keysym::Print, "PrtScn"),
     ("right", Keysym::Right, "→"),
+    // Runs the command from "script" in ufkbd.yaml (nerd font microphone).
+    ("script", Keysym::XF86_Launch0, "\u{f036c}"),
     ("shift", Keysym::Shift_L, "⇧"),
     ("space", Keysym::space, " "),
     ("switch_back_emoji", Keysym::Menu, "⌂"),
@@ -747,6 +749,21 @@ impl Layout {
                  | Keysym::Num_Lock
                  | Keysym::Caps_Lock
                  | Keysym::Menu)
+    }
+
+    // Keysym of the key that runs the configured script.
+    pub fn is_script(sym: Keysym) -> bool
+    {
+        sym == Keysym::XF86_Launch0
+    }
+
+    /*
+     * Keys that act on release instead of emitting a key or text: layout
+     * switchers and the script key. They do not repeat when held.
+     */
+    pub fn is_action(sym: Keysym) -> bool
+    {
+        Self::is_layout_switcher(sym) || Self::is_script(sym)
     }
 
     pub fn modifier_keysym(modifier: usize) -> Keysym

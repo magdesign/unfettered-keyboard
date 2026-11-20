@@ -23,7 +23,7 @@ build() {
 package() {
   cd "$srcdir/unfettered-keyboard"
 
-  install -Dm755 target/release/ufkbd-wl "$pkgdir/usr/bin/ufkbd-wl"
+  install -Dm755 target/release/ufkbd-wl "$pkgdir/usr/sbin/ufkbd-wl"
 
   # The layouts are part of the package, installed with it by apk.
   install -Dm644 resources/layouts/*.xml \

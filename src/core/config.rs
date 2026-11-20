@@ -127,6 +127,8 @@ pub struct Configuration {
 
     colors: KeyboardColors,
     keycap_padding: f64,
+    // Command run by the script key ("loc script" in layouts).
+    script: Option<String>,
 }
 
 impl Configuration {
@@ -310,6 +312,7 @@ impl Configuration {
 
             colors: KeyboardColors::default(),
             keycap_padding: 0.02,
+            script: None,
         }
     }
 
@@ -450,6 +453,26 @@ impl Configuration {
             self.keycap_padding = keycap_padding;
         }
 
+        let script = yaml.get(&Yaml::String(String::from("script")));
+        if let Some(script) = script {
+            let script = script.as_str().ok_or(ConfigurationError::TypeError {
+                field: "script",
+                expected: "string",
+            })?;
+
+            // An empty command leaves the script key out of the layout.
+            if !script.trim().is_empty() {
+                self.script = Some(script.to_string());
+            }
+        }
+
+        // Show the script key ("loc script") only when there is a script.
+        // This must come after extra_keys, which replaces the list.
+        if self.script.is_some() && !self.extra_keys.iter().any(|k| k == "script") {
+            self.extra_keys.push(String::from("script"));
+            self.extra_keys.sort_unstable();
+        }
+
         Ok(())
     }
 
@@ -521,6 +544,12 @@ impl Configuration {
     pub fn colors(&self) -> &KeyboardColors
     {
         &self.colors
+    }
+
+    #[inline(always)]
+    pub fn script(&self) -> Option<&str>
+    {
+        self.script.as_deref()
     }
 
     #[inline(always)]
@@ -622,4 +651,23 @@ mod tests {
             assert!(parse(&format!("wayland: {{ height_landscape: {} }}", bad)).is_err(), "{}", bad);
         }
     }
+
+    #[test]
+    fn script_enables_its_key()
+    {
+        let cfg = parse("").unwrap();
+        assert_eq!(cfg.script(), None);
+        assert!(!cfg.extra_keys().iter().any(|k| k == "script"));
+
+        let cfg = parse("script: \"echo hi\"\nextra_keys: [tab, alt]").unwrap();
+        assert_eq!(cfg.script(), Some("echo hi"));
+        // Sorted, since layouts look the keys up with a binary search.
+        assert_eq!(cfg.extra_keys(), &vec!["alt", "script", "tab"]);
+
+        let cfg = parse("script: \"  \"").unwrap();
+        assert_eq!(cfg.script(), None);
+
+        assert!(parse("script: [a, b]").is_err());
+    }
 }
+

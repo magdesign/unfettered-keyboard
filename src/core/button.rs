@@ -16,8 +16,11 @@ use crate::core::layout::MODIFIERS_MAX;
 use std::collections::VecDeque;
 use std::convert::TryInto;
 use std::iter;
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 use xkeysym::Keysym;
@@ -142,6 +145,8 @@ pub struct Button<D: Display, K: Keyboard> {
     longpress: Duration,
     repeat: Duration,
     emit_haptics: bool,
+    // Command run by the script key, from "script" in the configuration.
+    script: Option<String>,
     r_square: f64,
 
     x_scale: f64,
@@ -200,6 +205,7 @@ impl<D: Display, K: Keyboard> Button<D, K> {
             longpress: Duration::from_millis(cfg.longpress_ms()),
             repeat: Duration::from_millis(cfg.repeat_ms()),
             emit_haptics: cfg.haptics(),
+            script: cfg.script().map(String::from),
             r_square: 0.25,
 
             x_scale: 0.0,
@@ -542,8 +548,8 @@ impl<D: Display, K: Keyboard> Button<D, K> {
         let meta_pressed = modifiers[MOD_META - 1] != ModState::Released;
         let mods_pressed = ctrl_pressed || alt_pressed || meta_pressed;
 
-        // Layout switchers act on release in switch_layout() and emit nothing.
-        if Layout::is_layout_switcher(part.sym()) {
+        // Action keys act on release in release() and emit nothing.
+        if Layout::is_action(part.sym()) {
             return;
         }
 
@@ -766,9 +772,40 @@ impl<D: Display, K: Keyboard> Button<D, K> {
             draw.combine(self.switch_layout(keysym));
         }
 
+        if modifier == 0 && Layout::is_script(keysym) {
+            self.run_script();
+        }
+
         // After a switch, the indices refer to a different layout.
         let key = if switched { None } else { self.layout.key(row, col) };
         Self::draw(draw, &self.gfx, &self.layout, key, &self.modifiers);
+    }
+
+    /*
+     * Start the configured script with sh -c, without waiting for it: the
+     * keyboard must stay responsive while it runs. A thread reaps it.
+     */
+    fn run_script(&self)
+    {
+        let script = match &self.script {
+            Some(s) => s,
+            None => return,
+        };
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::null())
+            .spawn();
+
+        match child {
+            Ok(mut child) => {
+                thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            },
+            Err(e) => eprintln!("warn: failed to run script {:?}: {}", script, e),
+        }
     }
 
     fn lock_mod(&mut self, modifier: usize) -> DrawOperation
@@ -818,8 +855,8 @@ impl<D: Display, K: Keyboard> Button<D, K> {
             let modifier = part.modifier_id();
             if modifier != 0 {
                 draw.combine(self.lock_mod(modifier));
-            } else if Layout::is_layout_switcher(part.sym()) {
-                // Switchers act on release; holding them must not repeat.
+            } else if Layout::is_action(part.sym()) {
+                // Action keys act on release; holding them must not repeat.
             } else {
                 Self::emit(&mut self.kbd, part, &self.modifiers);
 
@@ -1181,4 +1218,51 @@ mod tests {
         assert!(!btn.is_pressed());
         assert_eq!(btn.keyboard().events, vec![]);
     }
+
+    #[test]
+    fn script_key_runs_the_configured_command()
+    {
+        let marker = std::env::temp_dir()
+            .join(format!("ufkbd-script-test-{}", std::process::id()));
+        let _ = std::fs::remove_file(&marker);
+
+        let yaml = format!("longpress_ms: 0\nrepeat_ms: 1\nscript: \"touch '{}'\"",
+                           marker.display());
+        let mut btn = setup(&yaml);
+        assert!(has_sym(&btn, Keysym::XF86_Launch0), "script key is not on the layout");
+
+        // Holding it neither repeats nor runs the script before release.
+        hold(&mut btn, 1, Keysym::XF86_Launch0);
+        btn.dispatch_timers();
+        thread::sleep(Duration::from_millis(5));
+        btn.dispatch_timers();
+        assert_eq!(btn.next_time(), None);
+
+        btn.release(1);
+
+        // The script runs in the background.
+        let mut ran = false;
+        for _ in 0..200 {
+            if marker.exists() {
+                ran = true;
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_file(&marker);
+
+        assert!(ran, "script did not run");
+        assert_eq!(typed(&btn), Vec::<&Ev>::new());
+    }
+
+    #[test]
+    fn script_key_is_hidden_without_a_script()
+    {
+        let btn = setup("");
+        assert!(!has_sym(&btn, Keysym::XF86_Launch0));
+
+        let btn = setup("script: \"\"");
+        assert!(!has_sym(&btn, Keysym::XF86_Launch0));
+    }
 }
+

@@ -2,6 +2,6 @@
 Type=Application
 Name=Unfettered Keyboard
 Icon=unfettered-keyboard
-Exec=/usr/bin/ufkbd-kde
+Exec=/usr/sbin/ufkbd-kde
 NoDisplay=true
 X-KDE-Wayland-VirtualKeyboard=true

@@ -6,7 +6,7 @@ PartOf=graphical-session.target
 [Service]
 Type=simple
 BusName=sm.puri.OSK0
-ExecStart=/usr/bin/ufkbd-gnome
+ExecStart=/usr/sbin/ufkbd-gnome
 Restart=on-failure
 RestartSec=1
 TimeoutStopSec=5
